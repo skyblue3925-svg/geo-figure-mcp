@@ -1,0 +1,18 @@
+# push·PR 마다 자동 검사(그림 종류별 생성, PPTX·HWPX 구조, 미리보기, 내장 자료)
+name: test
+on:
+  push:
+    branches: [main]
+  pull_request:
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - run: npm ci
+      - run: npm test
+        env:
+          GEO_FIGURE_NO_UPDATE_CHECK: '1'

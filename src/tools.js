@@ -7,10 +7,19 @@ import { z } from 'zod';
 import { SOURCES, findData, transform, round, assignLabels, suggestRegions, examSpots, kosisSearch, kosisItems, setKosisKey, bundleList, withKosisKey } from './data.js';
 import { listRegions } from './maps.js';
 import { makeFigure, exportFigures, loadStyle, saveStyle } from './build.js';
+import { renderPng } from './svg.js';
 import { CHARTS } from './charts.js';
 import { LANDFORM_PRESETS } from './terrain.js';
 
 const PKG_VERSION = JSON.parse(fs.readFileSync(new URL('../package.json', import.meta.url), 'utf8')).version;
+// 새 버전 알림: 켜질 때 npm 최신 버전을 한 번 묻는다(3초 안에 답이 없으면 그냥 넘어간다)
+let LATEST = null;
+if (!process.env.GEO_FIGURE_NO_UPDATE_CHECK) {
+  fetch('https://registry.npmjs.org/geo-figure-mcp/latest', { signal: AbortSignal.timeout(3000) })
+    .then((r) => r.json()).then((j) => { LATEST = j.version; }).catch(() => {});
+}
+const newer = (a, b) => { const x = a.split('.').map(Number), y = b.split('.').map(Number); for (let i = 0; i < 3; i++) { if ((x[i] || 0) !== (y[i] || 0)) return (x[i] || 0) > (y[i] || 0); } return false; };
+export const updateNotice = () => (LATEST && newer(LATEST, PKG_VERSION) ? `새 버전 ${LATEST} 이 있습니다(지금 ${PKG_VERSION}). MCP 설정의 args 를 ["-y", "geo-figure-mcp@latest"] 로 두고 앱을 다시 켜면 바뀝니다. 교사에게 한 번 알려 주세요.` : null);
 export const OUT = process.env.GEO_FIGURE_OUT || path.join(os.homedir(), 'Documents', '지리시험자료');
 
 const GUIDE = `
@@ -19,7 +28,7 @@ const GUIDE = `
 2. find_data 로 실제 통계를 찾는다. 한국 시·도·시·군·구 통계는 먼저 list_bundled_data(키 필요 없음)를 보고, 없을 때만 KOSIS(키 필요)를 쓴다. 숫자를 지어내지 않는다. 못 찾으면 [확인 필요]로 알리고 교사에게 숫자를 받는다.
 3. 만들기 전에 반드시 '계획 요약'을 보여 주고 교사의 "예"를 받는다:
    지표·단위 / 기준 연도 / 지역과 기호(A~E 또는 (가)~(마)) / 가공(지수·비율·편차·반올림) / 기호 순서(무작위·북→남·서→동·지정) / 출력(PPTX·HWPX) / 출처 문구
-4. make_figures 로 만들고, 파일 위치(원격이면 내려받기 주소)와 정답표를 알려 준다.
+4. 계획 요약과 함께 preview_figures 로 시안 그림을 보여 준다. 지도 기호 스타일을 교사가 정하지 않았으면 compareLabelStyles:true 로 4가지를 보여 주고 고르게 한다. 교사가 ‘예’라고 하면 make_figures 로 만들고, 파일 위치(원격이면 내려받기 주소)와 정답표를 알려 준다.
 5. 만든 뒤 고치기(범례·단계·지역·기호·순서): open_figure_spec 으로 설계도를 읽어 그 부분만 바꾸고 make_figures 를 다시 부른다. 통계를 다시 찾지 않는다. 손으로 고칠 땐 그룹 해제(개체 풀기) 한 번이면 모든 도형이 따로 움직인다고 알려 준다.
 
 [품질 규칙 — 교사 기준 + 경기도교육청 지리 문항 제작 자료]
@@ -39,7 +48,9 @@ const ok = (obj) => ({ content: [{ type: 'text', text: typeof obj === 'string' ?
 const fail = (e) => ({ isError: true, content: [{ type: 'text', text: `오류: ${e.message || e}` }] });
 const wrap = (fn) => async (a) => { try { return ok(await fn(a)); } catch (e) { return fail(e); } };
 
-server.tool('guide', '이 도구의 작업 순서와 시험 자료 품질 규칙, 그림 명세(spec) 작성법을 돌려준다. 처음 쓸 때 먼저 부른다.', {}, wrap(() => GUIDE + SPEC_HELP));
+server.tool('guide', '이 도구의 작업 순서와 시험 자료 품질 규칙, 그림 명세(spec) 작성법을 돌려준다. 처음 쓸 때 먼저 부른다.', {}, wrap(() => (updateNotice() ? `[알림] ${updateNotice()}
+` : '') + `geo-figure-mcp ${PKG_VERSION}
+` + GUIDE + SPEC_HELP));
 
 server.tool('list_sources', '쓸 수 있는 통계 자료원과 지표 예시를 보여 준다.', {}, wrap(() => SOURCES));
 
@@ -119,8 +130,31 @@ server.tool('make_figures', '그림 명세로 PPTX·HWPX 파일을 만든다. �
   // 고치기용 설계도: 같은 폴더에 <이름>.geo-figure.json — 나중에 open_figure_spec 으로 읽어 일부만 바꿔 다시 만든다
   let specFile = null;
   if (!remote) { specFile = path.join(dir, `${safe}.geo-figure.json`); fs.writeFileSync(specFile, JSON.stringify({ name: safe, formats: a.formats, style: a.style, answerKey: a.answerKey, figures: a.figures }, null, 1)); }
-  return { files, ...(remote ? { expires: `내려받기 주소는 ${publish.keepText} 동안, 한 번만 열립니다(받으면 서버에서 바로 지움). 꼭 내려받아 저장하세요.`, ...(a.answerKey ? { answerKey: a.answerKey, answerKeyNote: '시험 보안을 위해 정답표는 파일에 넣지 않았습니다. 이 내용을 교사에게 그대로 보여 주세요.' } : {}) } : {}), sizes_mm: figs.map((f) => ({ title: f.title, w: round(f.w), h: round(f.h) })), ...(specFile ? { specFile } : {}), note: '그림마다 묶음 하나 — PPTX는 그룹 해제, HWPX는 개체 풀기를 한 번만 하면 시군구·기호·선·범례가 모두 따로 움직인다(도형 이름이 지역 이름). 범례 칸과 지역은 같은 무늬라 서식 복사로 단계를 바꿀 수 있다. 범례·지역·기호를 크게 바꾸려면 open_figure_spec 으로 설계도를 읽어 고친 뒤 make_figures 를 다시 부른다.' };
+  return { files, ...(updateNotice() ? { update: updateNotice() } : {}), ...(remote ? { expires: `내려받기 주소는 ${publish.keepText} 동안, 한 번만 열립니다(받으면 서버에서 바로 지움). 꼭 내려받아 저장하세요.`, ...(a.answerKey ? { answerKey: a.answerKey, answerKeyNote: '시험 보안을 위해 정답표는 파일에 넣지 않았습니다. 이 내용을 교사에게 그대로 보여 주세요.' } : {}) } : {}), sizes_mm: figs.map((f) => ({ title: f.title, w: round(f.w), h: round(f.h) })), ...(specFile ? { specFile } : {}), note: '그림마다 묶음 하나 — PPTX는 그룹 해제, HWPX는 개체 풀기를 한 번만 하면 시군구·기호·선·범례가 모두 따로 움직인다(도형 이름이 지역 이름). 범례 칸과 지역은 같은 무늬라 서식 복사로 단계를 바꿀 수 있다. 범례·지역·기호를 크게 바꾸려면 open_figure_spec 으로 설계도를 읽어 고친 뒤 make_figures 를 다시 부른다.' };
 }));
+
+server.tool('preview_figures', '시안(미리보기 그림)을 대화창에 바로 보여 준다 — 파일을 만들기 전에 쓴다. 기호 스타일이 정해지지 않았으면 compareLabelStyles:true 로 4가지(흰 테두리·바탕 없음·네모 바탕·원 바탕)를 나란히 보여 주고 교사가 고르게 한다. 고른 뒤 make_figures 로 파일을 만든다.', {
+  figures: z.array(z.object({ title: z.string().optional() }).passthrough()).describe('make_figures 와 같은 그림 명세'),
+  compareLabelStyles: z.boolean().optional().describe('true 면 첫 지도 그림을 기호 스타일 4가지로 그려 비교'),
+  style: z.object({ font: z.string().optional(), fontPptx: z.string().optional(), size: z.number().optional(), small: z.number().optional(), width: z.number().optional() }).optional(),
+}, async (a) => {
+  try {
+    const st = { ...loadStyle(), ...(a.style || {}) };
+    const content = [];
+    const NAMES = { halo: '① 흰 테두리(기본)', plain: '② 바탕 없음', box: '③ 네모 흰 바탕', circle: '④ 작은 원 흰 바탕' };
+    const withStyle = (f, k) => JSON.parse(JSON.stringify(f, (key, v) => (key === 'map' && v && typeof v === 'object' ? { ...v, labelStyle: k } : v)));
+    const base = a.figures.find((x) => x.map || x.parts?.some((p) => p.map)) || a.figures[0];
+    const list = a.compareLabelStyles
+      ? Object.keys(NAMES).map((k) => ({ cap: NAMES[k], spec: withStyle(base, k) }))
+      : a.figures.slice(0, 6).map((f, i) => ({ cap: `시안 ${i + 1}: ${f.title || ''}`, spec: f }));
+    for (const { cap, spec } of list) {
+      const fig = await makeFigure(spec, st);
+      content.push({ type: 'text', text: cap }, { type: 'image', mimeType: 'image/png', data: Buffer.from(renderPng(fig, { width: 800 })).toString('base64') });
+    }
+    content.push({ type: 'text', text: a.compareLabelStyles ? '교사에게 ①~④ 중 하나를 고르게 하고, 그 값(halo·plain·box·circle)을 map.labelStyle 에 넣어 make_figures 를 부른다.' : '교사가 괜찮다고 하면 같은 명세로 make_figures(confirmed:true)를 부른다. 고칠 점이 있으면 고쳐서 다시 미리 본다.' });
+    return { content };
+  } catch (e) { return { isError: true, content: [{ type: 'text', text: `오류: ${e.message || e}` }] }; }
+});
 
 if (!remote) server.tool('open_figure_spec', '이미 만든 그림의 설계도(make_figures 가 저장한 <이름>.geo-figure.json)를 읽는다. "범례 바꿔 줘", "이 지역 빼 줘", "기호 순서 바꿔 줘" 같은 수정 요청은 이것을 읽어 필요한 부분만 고친 뒤 make_figures 를 다시 부른다(통계를 다시 찾지 않는다).', {
   path: z.string().optional().describe('설계도 파일 경로. 비우면 저장 폴더에서 가장 최근 것'),
@@ -154,7 +188,7 @@ map:
   classes:{ '경북':1, '서울 종로구':3 }   // 단계 번호 0~5 (흰색→빗금→연회색→격자→회색→진회색)
   legend:['90 미만','90~110', …],        // classes 단계 순서대로
   labels:{ '경북':'A' },                  // 지역 한가운데에 기호
-  labelBox: false,                        // true 면 기호 뒤에 흰 바탕(기본은 바탕 없음 — 무늬를 가리지 않는다)
+  labelStyle: 'halo',                     // 기호 글자: halo(흰 테두리, 기본) | plain(바탕 없음) | box(네모 흰 바탕) | circle(작은 원 흰 바탕)
   points:[{ lon, lat, label:'A' }],       // 점 + 기호 (도시·기후 지점)
   flows:[{ from:'경기', to:'서울', value:120 }], // 흐름 화살표(굵기 = 값)
   graticule:20, scaleBar:true|false, edition:'2026'|'2025' }

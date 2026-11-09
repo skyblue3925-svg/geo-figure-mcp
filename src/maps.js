@@ -3,7 +3,7 @@ import fs from 'node:fs';
 import { geoMercator, geoEquirectangular, geoPath, geoDistance, geoGraticule } from 'd3-geo';
 import { feature, merge } from 'topojson-client';
 import { presimplify, simplify, quantile } from 'topojson-simplify';
-import { S, CLASS_FILLS, DEFAULT_STYLE, textWidth } from './scene.js';
+import { S, CLASS_FILLS, DEFAULT_STYLE, textWidth, labelShape, LABEL_STYLES } from './scene.js';
 
 const DATA = new URL('../data/', import.meta.url);
 const cache = {};
@@ -88,6 +88,7 @@ export function listRegions({ region = 'korea', level = 'sido', within, edition 
 //         classes:{지역: 단계번호}, legend:[단계 라벨], labels:{지역:'A'}, points:[{label,lon,lat,name?}],
 //         flows:[{from,to,value}], graticule: 10, width }
 export function makeMap(spec, st = DEFAULT_STYLE) {
+  const LS = LABEL_STYLES.includes(spec.labelStyle) ? spec.labelStyle : (spec.labelBox ? 'box' : 'halo');
   const W = spec.width || st.width;
   const detail = spec.detail || 'mid';
   const isKorea = (spec.region || 'korea') === 'korea';
@@ -145,7 +146,7 @@ export function makeMap(spec, st = DEFAULT_STYLE) {
     const rs = rings(path, f.geo);
     if (!rs.length) continue;
     const [x, y] = polylabel(rs);
-    labels.push(S.text(x, y, lab, { size: st.size + 1, bold: true, box: !!spec.labelBox, name: `기호 ${lab}` }));
+    labels.push(labelShape(x, y, lab, { size: st.size + 1, bold: true }, LS));
   }
   // 지점 기호: 서로 겹치면 오른쪽 위 → 오른쪽 아래 → 왼쪽 위 → 왼쪽 아래 → 위 → 아래 순으로 비켜 놓는다
   const placed = [];
@@ -166,7 +167,7 @@ export function makeMap(spec, st = DEFAULT_STYLE) {
         if (!others.some((o) => box[0] < o[2] && box[2] > o[0] && box[1] < o[3] && box[3] > o[1])) { pick = t; placed.push(box); break; }
         if (t === tries.at(-1)) placed.push(box);
       }
-      g.push(S.text(xy[0] + pick[0], xy[1] + pick[1], p.label, { size: st.size + 1, bold: true, anchor: pick[2], box: !!spec.labelBox, name: `기호 ${p.label}` }));
+      g.push(labelShape(xy[0] + pick[0], xy[1] + pick[1], p.label, { size: st.size + 1, bold: true, anchor: pick[2] }, LS));
     }
     labels.push(S.group(`지점 ${p.label || p.name || ''}`, g));
   }

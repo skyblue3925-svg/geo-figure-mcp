@@ -50,14 +50,14 @@ export function buildHwpx(figs, opts = {}) {
     return id;
   };
   const CH = new Map();
-  const charPr = (size, bold, face = style.font) => {
-    const k = `${size}|${bold}|${face}`;
+  const charPr = (size, bold, face = style.font, color = '#000000') => {
+    const k = `${size}|${bold}|${face}|${color}`;
     if (CH.has(k)) return CH.get(k);
     const f = fontId(face);
     const m = header.match(/<hh:charProperties itemCnt="(\d+)">/);
     const id = +m[1];
     const a = (v) => `hangul="${v}" latin="${v}" hanja="${v}" japanese="${v}" other="${v}" symbol="${v}" user="${v}"`;
-    const xml = `<hh:charPr id="${id}" height="${Math.round(size * 100)}" textColor="#000000" shadeColor="none" useFontSpace="0" useKerning="0" symMark="NONE" borderFillIDRef="2"><hh:fontRef ${a(f)}/><hh:ratio ${a(100)}/><hh:spacing ${a(0)}/><hh:relSz ${a(100)}/><hh:offset ${a(0)}/>${bold ? '<hh:bold/>' : ''}<hh:underline type="NONE" shape="SOLID" color="#000000"/><hh:strikeout shape="NONE" color="#000000"/><hh:outline type="NONE"/><hh:shadow type="NONE" color="#C0C0C0" offsetX="10" offsetY="10"/></hh:charPr>`;
+    const xml = `<hh:charPr id="${id}" height="${Math.round(size * 100)}" textColor="${color}" shadeColor="none" useFontSpace="0" useKerning="0" symMark="NONE" borderFillIDRef="2"><hh:fontRef ${a(f)}/><hh:ratio ${a(100)}/><hh:spacing ${a(0)}/><hh:relSz ${a(100)}/><hh:offset ${a(0)}/>${bold ? '<hh:bold/>' : ''}<hh:underline type="NONE" shape="SOLID" color="#000000"/><hh:strikeout shape="NONE" color="#000000"/><hh:outline type="NONE"/><hh:shadow type="NONE" color="#C0C0C0" offsetX="10" offsetY="10"/></hh:charPr>`;
     header = header.replace(m[0], `<hh:charProperties itemCnt="${id + 1}">`).replace('</hh:charProperties>', xml + '</hh:charProperties>');
     CH.set(k, id);
     return id;
@@ -122,7 +122,7 @@ export function buildHwpx(figs, opts = {}) {
     const y = it.v === 't' ? it.y : it.v === 'b' ? it.y - h : it.y - h / 2;
     const align = 'CENTER';
     let bx = x, bw = w;
-    const body = `<hp:p id="0" paraPrIDRef="${paraPr(align)}" styleIDRef="0" pageBreak="0" columnBreak="0" merged="0"><hp:run charPrIDRef="${charPr(it.size, it.bold)}"><hp:t>${esc(it.str)}</hp:t></hp:run></hp:p>`;
+    const body = `<hp:p id="0" paraPrIDRef="${paraPr(align)}" styleIDRef="0" pageBreak="0" columnBreak="0" merged="0"><hp:run charPrIDRef="${charPr(it.size, it.bold, style.font, it.color || '#000000')}"><hp:t>${esc(it.str)}</hp:t></hp:run></hp:p>`;
     const out = head('rect', bx, y, bw, h, ' ratio="0"') + lineShape(0) + (it.box ? fillBrush({ k: 'solid', gray: '#FFFFFF' }) : '') + shadow + `<hp:drawText lastWidth="${u(bw)}" name="" editable="0"><hp:subList id="" textDirection="HORIZONTAL" lineWrap="BREAK" vertAlign="CENTER" linkListIDRef="0" linkListNextIDRef="0" textWidth="0" textHeight="0" hasTextRef="0" hasNumRef="0">${body}</hp:subList><hp:textMargin left="0" right="0" top="0" bottom="0"/></hp:drawText>` + rectPts(bw, h) + '</hp:rect>';
     if (it.box) {
       // 흰 바탕 상자는 글자 크기에 맞게 좁힌다

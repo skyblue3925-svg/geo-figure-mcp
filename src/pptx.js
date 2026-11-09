@@ -58,7 +58,7 @@ export function buildPptx(figs, opts = {}) {
       const y = it.v === 't' ? it.y : it.v === 'b' ? it.y - h : it.y - h / 2;
       const algn = { l: 'l', c: 'ctr', r: 'r' }[it.anchor];
       const box = it.box ? '<a:solidFill><a:srgbClr val="FFFFFF"/></a:solidFill>' : '<a:noFill/>';
-      return `<p:sp><p:nvSpPr>${nv(it.name || `글자 ${it.str}`)}<p:cNvSpPr txBox="1"/><p:nvPr/></p:nvSpPr><p:spPr>${xfrm(x, y, w, h)}<a:prstGeom prst="rect"><a:avLst/></a:prstGeom>${box}</p:spPr><p:txBody><a:bodyPr wrap="none" lIns="0" tIns="0" rIns="0" bIns="0" anchor="ctr"><a:noAutofit/></a:bodyPr><a:lstStyle/><a:p><a:pPr algn="${algn}"/><a:r><a:rPr lang="ko-KR" sz="${Math.round(it.size * 100)}" b="${it.bold ? 1 : 0}"><a:solidFill><a:srgbClr val="000000"/></a:solidFill><a:latin typeface="${esc(style.fontPptx || style.font)}"/><a:ea typeface="${esc(style.fontPptx || style.font)}"/></a:rPr><a:t>${esc(it.str)}</a:t></a:r></a:p></p:txBody></p:sp>`;
+      return `<p:sp><p:nvSpPr>${nv(it.name || `글자 ${it.str}`)}<p:cNvSpPr txBox="1"/><p:nvPr/></p:nvSpPr><p:spPr>${xfrm(x, y, w, h)}<a:prstGeom prst="rect"><a:avLst/></a:prstGeom>${box}</p:spPr><p:txBody><a:bodyPr wrap="none" lIns="0" tIns="0" rIns="0" bIns="0" anchor="ctr"><a:noAutofit/></a:bodyPr><a:lstStyle/><a:p><a:pPr algn="${algn}"/><a:r><a:rPr lang="ko-KR" sz="${Math.round(it.size * 100)}" b="${it.bold ? 1 : 0}"><a:solidFill><a:srgbClr val="${hex(it.color || '#000000')}"/></a:solidFill><a:latin typeface="${esc(style.fontPptx || style.font)}"/><a:ea typeface="${esc(style.fontPptx || style.font)}"/></a:rPr><a:t>${esc(it.str)}</a:t></a:r></a:p></p:txBody></p:sp>`;
     }
     return '';
   }

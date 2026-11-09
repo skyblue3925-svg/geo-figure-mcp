@@ -1,0 +1,89 @@
+{
+ "name": "시연2_세계_인구",
+ "formats": [
+  "pptx",
+  "hwpx"
+ ],
+ "answerKey": "정답표\n(가) = 독일\n(나) = 대한민국\n(다) = 나이지리아\n(라) = 인도",
+ "figures": [
+  {
+   "title": "네 나라의 인구 구조와 합계 출산율",
+   "layout": "row",
+   "parts": [
+    {
+     "caption": "(가) 합계 출산율",
+     "chart": {
+      "type": "bar",
+      "categories": [
+       "(가)",
+       "(나)",
+       "(다)",
+       "(라)"
+      ],
+      "series": [
+       {
+        "name": "합계 출산율",
+        "values": [
+         1.36,
+         0.75,
+         4.38,
+         1.96
+        ]
+       }
+      ],
+      "unit": "(명)",
+      "valueLabels": "all",
+      "width": 62,
+      "height": 50
+     }
+    },
+    {
+     "caption": "(나) 연령층별 인구 비율",
+     "chart": {
+      "type": "stacked",
+      "categories": [
+       "(가)",
+       "(나)",
+       "(다)",
+       "(라)"
+      ],
+      "series": [
+       {
+        "name": "0~14세",
+        "values": [
+         14,
+         11,
+         41,
+         25
+        ]
+       },
+       {
+        "name": "15~64세",
+        "values": [
+         63,
+         70,
+         56,
+         68
+        ]
+       },
+       {
+        "name": "65세 이상",
+        "values": [
+         23,
+         19,
+         3,
+         7
+        ]
+       }
+      ],
+      "unit": "(%)",
+      "valueLabels": "all",
+      "width": 70,
+      "height": 50
+     }
+    }
+   ],
+   "source": "World Bank WDI, 2024"
+  }
+ ]
+}

@@ -32,8 +32,8 @@ export const S = {
   dot: (x, y, r, o = {}) => ({ t: 'ellipse', x: x - r, y: y - r, w: 2 * r, h: 2 * r, fill: o.fill || { k: 'solid', gray: '#000000' }, stroke: o.stroke ?? 0, name: o.name }),
   ellipse: (x, y, w, h, o = {}) => ({ t: 'ellipse', x, y, w, h, fill: o.fill || { k: 'none' }, stroke: o.stroke ?? 0.2, name: o.name }),
   // anchor: 'l' | 'c' | 'r' ; v: 't' | 'm' | 'b' — (x,y) 는 기준점
-  text: (x, y, str, o = {}) => ({ t: 'text', x, y, str: String(str), size: o.size || 8, bold: !!o.bold, anchor: o.anchor || 'c', v: o.v || 'm', box: !!o.box, name: o.name }),
-  group: (name, items) => ({ t: 'group', name, items: items.filter(Boolean) }),
+  text: (x, y, str, o = {}) => ({ t: 'text', x, y, str: String(str), size: o.size || 8, bold: !!o.bold, anchor: o.anchor || 'c', v: o.v || 'm', box: !!o.box, color: o.color, name: o.name }),
+  group: (name, items, o = {}) => ({ t: 'group', name, items: items.filter(Boolean), keep: !!o.keep }),
 };
 
 // 글자 폭 추정(mm). 한글은 정사각에 가깝고 영문·숫자는 약 0.55
@@ -97,4 +97,21 @@ export function withFooter(fig, style = DEFAULT_STYLE) {
     lines.forEach((l, i) => items.push(S.text(fig.w - 0.5, y + i * style.small * 0.3528 * 1.35, l, { size: style.small, anchor: 'r', v: 't', name: '출처' })));
   }
   return figure({ ...fig, items, pad: 0.5 });
+}
+
+// 지도 기호 글자. style: 'halo'(글자 둘레 흰 테두리, 기본) | 'plain'(바탕 없음) | 'box'(네모 흰 바탕) | 'circle'(작은 원 흰 바탕)
+// halo·circle 은 글자와 바탕이 함께 움직이도록 작은 묶음 하나로 둔다(그림 묶음을 풀어도 기호마다 한 덩어리)
+export const LABEL_STYLES = ['halo', 'plain', 'box', 'circle'];
+export function labelShape(x, y, str, o = {}, style = 'halo') {
+  const name = o.name || `기호 ${str}`;
+  if (style === 'plain') return S.text(x, y, str, { ...o, name });
+  if (style === 'box') return S.text(x, y, str, { ...o, box: true, name });
+  const anchorDx = o.anchor === 'l' ? textWidth(str, o.size || 8) / 2 : o.anchor === 'r' ? -textWidth(str, o.size || 8) / 2 : 0;
+  if (style === 'circle') {
+    const r = Math.max(textWidth(str, o.size || 8), (o.size || 8) * 0.3528) / 2 + 0.5;
+    return S.group(name, [S.ellipse(x + anchorDx - r, y - r, 2 * r, 2 * r, { fill: { k: 'solid', gray: '#FFFFFF' }, stroke: 0, name: `${name} 바탕` }), S.text(x, y, str, { ...o, name })], { keep: true });
+  }
+  const d = 0.28, k = [];
+  for (const [dx, dy] of [[d, 0], [-d, 0], [0, d], [0, -d], [d * 0.7, d * 0.7], [-d * 0.7, d * 0.7], [d * 0.7, -d * 0.7], [-d * 0.7, -d * 0.7]]) k.push(S.text(x + dx, y + dy, str, { ...o, color: '#FFFFFF', name: `${name} 테두리` }));
+  return S.group(name, [...k, S.text(x, y, str, { ...o, name })], { keep: true });
 }

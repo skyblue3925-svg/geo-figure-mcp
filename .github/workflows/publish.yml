@@ -22,6 +22,9 @@ jobs:
         if: github.event_name == 'push'
         run: test "v$(node -p "require('./package.json').version")" = "${GITHUB_REF_NAME}"
       - run: npm ci
+      - run: npm test
+        env:
+          GEO_FIGURE_NO_UPDATE_CHECK: '1'
       - if: github.event_name == 'push'
         run: npm publish --access public
       - name: MCP 공식 등록소에 등록
