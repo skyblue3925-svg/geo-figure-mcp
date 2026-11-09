@@ -136,10 +136,22 @@ export function makeMap(spec, st = DEFAULT_STYLE) {
     areas.push(S.poly(rs, { fill, stroke: inFocus.has(f) ? 0.2 : 0.12, name: f.full }));
   }
   items.push(S.group(isKorea ? '행정 구역' : '국가', areas));
-  // 경계 굵게: 시·군 지도일 때 시·도 경계를 한 번 더
-  if (isKorea && spec.level === 'sigungu') {
-    const sidos = koreaFeatures('sido', detail, spec.edition);
-    items.push(S.group('시·도 경계', sidos.flatMap((f) => rings(path, f.geo).map((r) => S.line([...r, r[0]], { stroke: 0.4, name: `${f.name} 경계` })))));
+  const isSigungu = spec.level === 'sigungu';
+  if (isKorea && (isSigungu || spec.within?.length)) {
+    const sidos = isSigungu ? koreaFeatures('sido', detail, spec.edition) : feats;
+    const selected = new Set(spec.within);
+    const context = isSigungu ? sidos.filter((f) => !selected.has(f.name)).flatMap((f) =>
+      rings(path, f.geo).map((r) => S.line([...r, r[0]], { stroke: 0.4, name: `${f.name} 경계` }))) : [];
+    // 같은 시·도의 시·군·구를 합친 경계를 위에 그려 내부 경계와 구분한다.
+    const outlines = sidos.filter((f) => selected.has(f.name)).flatMap((f) => {
+      const style = { stroke: 0.7, name: `${f.name} 경계` };
+      if (!spec.bbox) return rings(path, f.geo).map((r) => S.poly([r], style));
+      // 잘린 면을 닫으면 지도 틀이 경계처럼 보일 수 있으므로 원래 경계선만 자른다.
+      const { type, coordinates } = f.geo.geometry;
+      const boundary = { type: 'MultiLineString', coordinates: type === 'Polygon' ? coordinates : coordinates.flat() };
+      return lines(path, boundary).filter((pts) => pts.some(([x, y]) => x !== pts[0][0] || y !== pts[0][1])).map((pts) => S.line(pts, style));
+    });
+    items.push(S.group('시·도 경계', [...context, ...outlines]));
   }
   for (const [n, lab] of Object.entries(spec.labels || {})) {
     const f = find(n);
