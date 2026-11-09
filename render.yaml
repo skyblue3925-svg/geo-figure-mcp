@@ -1,0 +1,12 @@
+# Render.com 무료 웹 서비스로 올리기: 저장소를 연결하면 이 설정을 읽는다
+services:
+  - type: web
+    name: geo-figure-mcp
+    runtime: docker
+    plan: free
+    healthCheckPath: /health
+    envVars:
+      - key: PUBLIC_URL
+        sync: false   # 배포 뒤 받은 주소(https://…onrender.com)를 넣는다
+      - key: ACCESS_TOKEN
+        generateValue: true   # 필수 접속 비밀번호(Render가 무작위로 만든다). 연수 참가자에게만 알려 준다

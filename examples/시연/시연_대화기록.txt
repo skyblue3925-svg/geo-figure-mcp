@@ -1,0 +1,26 @@
+👩‍🏫 교사: "우리 동네 주제로, 경기도 시·군 주간 인구 지수 지도 만들어 줘. 화성시는 꼭 넣고 나머지 3곳은 판별 잘 되게. 이름은 숨겨서."
+   🔧 find_data({"source":"bundle","bundle":{"key":"daytime-population","items":["주간 인구 지수"]}})
+   🔧 suggest_regions({"rows":[{"name":"경기 수원시","values":{"지수":91.3}},{"name":"경기 성남시","values":{"지수":104.3}},{"name":"경기 의정부시","val…)
+   🔧 assign_labels({"names":["경기 화성시","경기 포천시","경기 의정부시","경기 성남시"],"order":"random","seed":9})
+🤖 AI: 계획 요약 — 지표: 주간 인구 지수 / 연도: 2020(인구주택총조사) / 지역: 경기 시·군 31곳, 기호 A~D = A:포천시(122.8), B:화성시(106.7), C:성남시(104.3), D:의정부시(83.5) / 단계 4개(90·100·110 경계) / 지도 판 2025 / 출처: 국가데이터처(통계청), 「성별/연령별 상주(야간) · 주간 인구-시군구」. 이대로 만들까요?
+👩‍🏫 교사: "응"
+   🔧 make_figures({"confirmed":true,"name":"시연1_경기_주간인구","answerKey":"정답표\nA = 포천시 (주간 인구 지수 122.8)\nB = 화성시 (주간 인구 지수 106.7)\nC…)
+🤖 AI: 만들었어요 → 시연1_경기_주간인구.pptx, 시연1_경기_주간인구.hwpx
+👩‍🏫 교사: "통합사회 세계 인구 단원용으로, 나라 4곳 인구 피라미드랑 합계 출산율 막대그래프. 선진국·개도국 섞어서, 나라 이름은 (가)~(라)."
+   🔧 find_data({"source":"worldbank","indicators":["SP.DYN.TFRT.IN","SP.POP.0014.TO.ZS","SP.POP.65UP.TO.ZS"],"regions":["KOR"…)
+   🔧 assign_labels({"names":["독일","인도","대한민국","나이지리아"],"style":"ga","seed":5})
+🤖 AI: 계획 요약 — 지표: 합계 출산율, 유소년(0~14세)·노년(65세 이상) 인구 비율 / 연도: 2024 / 나라: (가):독일, (나):대한민국, (다):나이지리아, (라):인도 / 그래프 2개(막대·누적 막대) / 출처: 세계은행 WDI. 피라미드는 5세 단위 자료 대신 연령 3구분 누적 막대로 만들까요?
+👩‍🏫 교사: "좋아"
+   🔧 make_figures({"confirmed":true,"name":"시연2_세계_인구","answerKey":"정답표\n(가) = 독일\n(나) = 대한민국\n(다) = 나이지리아\n(라) = 인도","figures":…)
+🤖 AI: 만들었어요 → 시연2_세계_인구.pptx, 시연2_세계_인구.hwpx
+👩‍🏫 교사: "세계지리 기후 단원. 평가원 기출 지점 중에 지중해성 기후 2곳, 서안 해양성 1곳, 건조 1곳 골라서 세계 지도랑 기후 그래프 짝짓기 문제 자료."
+   🔧 list_exam_climate_spots({"code":"Cs"})
+   🔧 list_exam_climate_spots({"code":"Cfb"})
+   🔧 list_exam_climate_spots({"code":"BW"})
+   🔧 find_data({"source":"climate","regions":["로마","퍼스","브뤼셀","카스"]})
+   🔧 assign_labels({"names":["로마","퍼스","브뤼셀","카스"],"order":"west-east","coords":{"로마":[12.585,41.808],"퍼스":[115.976,-31.927],"브뤼셀…)
+   🔧 assign_labels({"names":["로마","퍼스","브뤼셀","카스"],"style":"ga","seed":11})
+🤖 AI: 계획 요약 — 지점: 로마(Cs, RomaCiampino 관측소 13km), 퍼스(Cs, PerthAirport 관측소 11km), 브뤼셀(Cfb, UCCLE 관측소 6km), 카스(BW, KASHI 관측소 21km) / 지도 A~D는 서→동, 그래프 (가)~(라)는 무작위 / 자료: WMO 기후평년값(1991~2020). 남반구 지점이 하나 들어가 계절 반전 함정을 만들 수 있어요. 만들까요?
+👩‍🏫 교사: "그래"
+   🔧 make_figures({"confirmed":true,"name":"시연3_기후_짝짓기","answerKey":"정답표\nB = (다) = 로마\nD = (라) = 퍼스\nA = (나) = 브뤼셀\nC = (가) = 카…)
+🤖 AI: 만들었어요 → 시연3_기후_짝짓기.pptx, 시연3_기후_짝짓기.hwpx

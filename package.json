@@ -1,0 +1,55 @@
+{
+  "name": "geo-figure-mcp",
+  "version": "0.2.0",
+  "description": "지리 시험용 지도·그래프를 도형 하나하나 고칠 수 있는 PPTX·HWPX로 만드는 MCP 서버",
+  "mcpName": "io.github.skyblue3925-svg/geo-figure-mcp",
+  "type": "module",
+  "bin": {
+    "geo-figure-mcp": "src/server.js"
+  },
+  "files": [
+    "src",
+    "data",
+    "templates",
+    "README.md",
+    "LICENSE",
+    "server.json"
+  ],
+  "scripts": {
+    "start": "node src/server.js",
+    "examples": "node examples/run.js",
+    "start:remote": "node src/http.js",
+    "demo": "node examples/demo.js"
+  },
+  "keywords": [
+    "mcp",
+    "mcp-server",
+    "geography",
+    "지리",
+    "exam",
+    "map",
+    "chart",
+    "pptx",
+    "hwpx",
+    "teacher"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/skyblue3925-svg/geo-figure-mcp.git"
+  },
+  "homepage": "https://github.com/skyblue3925-svg/geo-figure-mcp#readme",
+  "license": "MIT",
+  "engines": {
+    "node": ">=20"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.32.2",
+    "d3-contour": "^4.0.3",
+    "d3-geo": "^3.1.2",
+    "fflate": "^0.8.3",
+    "pngjs": "^7.0.0",
+    "topojson-client": "^3.1.0",
+    "topojson-simplify": "^3.0.3",
+    "zod": "^4.6.7"
+  }
+}

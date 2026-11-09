@@ -1,0 +1,159 @@
+// geo-figure-mcp 도구 정의 — 로컬(stdio)·원격(HTTP) 공용. createServer({ remote, publish }) 로 만든다.
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
+import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
+import { z } from 'zod';
+import { SOURCES, findData, transform, round, assignLabels, suggestRegions, examSpots, kosisSearch, kosisItems, setKosisKey, bundleList, withKosisKey } from './data.js';
+import { listRegions } from './maps.js';
+import { makeFigure, exportFigures, loadStyle, saveStyle } from './build.js';
+import { CHARTS } from './charts.js';
+import { LANDFORM_PRESETS } from './terrain.js';
+
+const PKG_VERSION = JSON.parse(fs.readFileSync(new URL('../package.json', import.meta.url), 'utf8')).version;
+export const OUT = process.env.GEO_FIGURE_OUT || path.join(os.homedir(), 'Documents', '지리시험자료');
+
+const GUIDE = `
+[작업 순서 — 반드시 지킨다]
+1. 교사의 말에서 지도·그래프 종류, 지표, 지역, 연도를 읽는다. 모르면 기본값을 채운다.
+2. find_data 로 실제 통계를 찾는다. 한국 시·도·시·군·구 통계는 먼저 list_bundled_data(키 필요 없음)를 보고, 없을 때만 KOSIS(키 필요)를 쓴다. 숫자를 지어내지 않는다. 못 찾으면 [확인 필요]로 알리고 교사에게 숫자를 받는다.
+3. 만들기 전에 반드시 '계획 요약'을 보여 주고 교사의 "예"를 받는다:
+   지표·단위 / 기준 연도 / 지역과 기호(A~E 또는 (가)~(마)) / 가공(지수·비율·편차·반올림) / 기호 순서(무작위·북→남·서→동·지정) / 출력(PPTX·HWPX) / 출처 문구
+4. make_figures 로 만들고, 파일 위치(원격이면 내려받기 주소)와 정답표를 알려 준다.
+
+[품질 규칙 — 교사 기준 + 경기도교육청 지리 문항 제작 자료]
+- 흑백 인쇄로 구분돼야 한다: 색 대신 빗금·회색 농도(자동).
+- 정답 단서를 드러내지 않는다: 지명·국가명은 기호로 바꾸고, 정답표는 파일 마지막 장에 둔다.
+- 경계는 자료 연도에 맞춘다: 2026년 7월 이후 자료는 2026년 판(16개 시·도, '전남광주'), 그 전 자료는 map.edition:'2025'(17개 시·도). 내장 자료는 mapEdition 과 mapName 을 알려 준다.
+- 출처와 기준 연도를 꼭 적는다: 출처는 그림 오른쪽 아래(자동). 지도 출처도 함께.
+- 전도(세계·대륙·우리나라 전체)가 아닌 지도에는 축척을 넣는다(자동).
+- 그림의 특정 부분은 A, B, C 대문자, 독립 대상은 (가)·(나)·(다).
+- 생소한 용어와 자료 조건은 notes(주석)로 보충한다. 풀이에 불필요한 그림은 넣지 않는다.
+- 판별용 지역은 suggest_regions 로 서로 잘 갈리는 곳을 고른다.
+`;
+
+export function createServer({ remote = false, publish = null } = {}) {
+const server = new McpServer({ name: 'geo-figure-mcp', version: PKG_VERSION }, { instructions: `지리 시험용 지도·그래프 제작 도구.\n${GUIDE}` });
+const ok = (obj) => ({ content: [{ type: 'text', text: typeof obj === 'string' ? obj : JSON.stringify(obj, null, 1) }] });
+const fail = (e) => ({ isError: true, content: [{ type: 'text', text: `오류: ${e.message || e}` }] });
+const wrap = (fn) => async (a) => { try { return ok(await fn(a)); } catch (e) { return fail(e); } };
+
+server.tool('guide', '이 도구의 작업 순서와 시험 자료 품질 규칙, 그림 명세(spec) 작성법을 돌려준다. 처음 쓸 때 먼저 부른다.', {}, wrap(() => GUIDE + SPEC_HELP));
+
+server.tool('list_sources', '쓸 수 있는 통계 자료원과 지표 예시를 보여 준다.', {}, wrap(() => SOURCES));
+
+server.tool('find_data', '실제 통계를 찾는다. 결과에 출처(cite)와 연도가 붙는다. 숫자를 지어내지 말고 이 결과만 쓴다.', {
+  source: z.enum(remote ? Object.keys(SOURCES).filter((k) => k !== 'kosis') : Object.keys(SOURCES)).describe(remote ? '자료원 (원격 서버에서는 KOSIS 직접 조회를 쓰지 않는다 — 내장 자료 bundle 을 쓴다)' : '자료원'),
+  indicators: z.array(z.string()).default([]).describe('지표 코드 또는 열 이름'),
+  regions: z.array(z.string()).default([]).describe('나라 ISO3(KOR, JPN…, 세계=WLD) / 기후: 기출 지점 한글 이름·관측소 영문 이름·"위도,경도" / 서울 자치구 이름'),
+  kosis: z.object({ orgId: z.string().optional(), tblId: z.string().optional(), itmId: z.string().optional(), objL1: z.string().optional(), objL2: z.string().optional(), year: z.number().optional() }).passthrough().optional().describe('source 가 kosis 일 때: { orgId, tblId, itmId, objL1:"ALL", objL2, year }'),
+  bundle: z.object({ key: z.string(), items: z.array(z.string()).optional(), period: z.coerce.string().optional(), where: z.object({}).passthrough().optional() }).passthrough().optional().describe('source 가 bundle 일 때: { key, items:[항목], period, where:{ C1:"총인구" } }'),
+  year: z.number().optional().describe('특정 연도. 비우면 가장 최근'),
+  years: z.boolean().optional().describe('true 면 연도별 전체(시계열)'),
+}, wrap((a) => { if (remote && a.source === 'kosis') throw new Error('원격 서버에서는 KOSIS 직접 조회를 하지 않습니다(인증키를 대화창에 넣지 않도록). list_bundled_data 의 내장 자료를 쓰거나, 내 컴퓨터에 설치해 쓰세요.'); return findData(a); }));
+
+server.tool('list_exam_climate_spots', '평가원 기후 기출 지점(2022~2026학년도) 목록: 이름, 기후 기호, 출제 시험(연월일), 좌표.', {
+  code: z.string().optional().describe("기후 기호로 거르기. 예: 'Cs', 'BW', 'Df'"),
+}, wrap((a) => examSpots().filter((s) => !a.code || (s.code || '').startsWith(a.code)).map((s) => ({ name: s.name, code: s.code, exams: s.exams, lat: s.lat, lon: s.lon, data: s.climate ? s.climate.source : (s.lat == null ? '좌표 없음' : 'WMO') }))));
+
+server.tool('list_bundled_data', '키 없이 쓰는 내장 KOSIS 통계 목록(주제·기간·항목·분류). KOSIS 를 직접 부르기 전에 먼저 여기서 찾는다.', {}, wrap(() => bundleList()));
+
+if (!remote) {
+server.tool('kosis_search', 'KOSIS 국가통계포털에서 통계표를 찾는다(시·도·시·군·구 통계). 인증키 필요 — 먼저 list_bundled_data 를 본다.', {
+  query: z.string().describe('찾을 말. 예: 주간인구, 발전량 시도, 외국인 주민'),
+}, wrap((a) => kosisSearch(a.query)));
+
+server.tool('kosis_items', 'KOSIS 통계표의 항목(itmId)·분류(objL1…)·기간을 본다.', {
+  orgId: z.string(), tblId: z.string(),
+}, wrap((a) => kosisItems(a)));
+}
+
+if (!remote) server.tool('set_kosis_key', 'KOSIS 인증키를 이 컴퓨터 사용자 폴더에 저장한다(kosis.kr/openapi 에서 무료 발급).', { key: z.string() }, wrap((a) => setKosisKey(a.key)));
+
+server.tool('list_regions', '지도에 쓸 수 있는 지역 이름 목록(한국 시·도, 시·군·구, 세계 국가 영문명).', {
+  region: z.enum(['korea', 'world']).default('korea'),
+  level: z.enum(['sido', 'sigungu']).default('sido'),
+  within: z.array(z.string()).optional().describe("시·군·구 목록을 이 시·도 안으로 좁힌다. 예: ['경기']"),
+}, wrap((a) => listRegions(a)));
+
+server.tool('suggest_regions', '지표 값이 서로 뚜렷하게 갈리는 지역 k곳을 추천한다(판별이 잘 되는 조합).', {
+  rows: z.array(z.object({ name: z.string(), values: z.object({}).catchall(z.number()) })).describe('find_data 결과의 rows'),
+  indicators: z.array(z.string()),
+  k: z.number().default(5),
+}, wrap((a) => suggestRegions(a.rows, a.indicators, a.k)));
+
+server.tool('prepare_values', '출제용 가공: 최댓값=100 지수, 합에 대한 비율, 기준값과의 차이(편차), 기준 대비 %, 반올림.', {
+  values: z.array(z.number()),
+  mode: z.enum(['none', 'max100', 'share', 'deviation', 'national']).default('none'),
+  base: z.number().optional().describe('deviation·national 의 기준값'),
+  digits: z.number().default(1),
+}, wrap((a) => transform(a.values, a.mode, a.base).map((v) => round(v, a.digits))));
+
+server.tool('assign_labels', '지역 이름을 A~E 또는 (가)~(마) 기호로 바꾼다. 순서: random(기본) / north-south / west-east / given.', {
+  names: z.array(z.string()),
+  order: z.enum(['random', 'north-south', 'west-east', 'given']).default('random'),
+  style: z.enum(['AE', 'ga']).default('AE'),
+  coords: z.object({}).catchall(z.array(z.number())).optional().describe('north-south·west-east 일 때 {이름:[경도,위도]}'),
+  seed: z.number().optional(),
+}, wrap((a) => assignLabels(a.names, a)));
+
+server.tool('make_figures', '그림 명세로 PPTX·HWPX 파일을 만든다. 만들기 전에 교사에게 계획 요약을 보여 주고 확인을 받았는지 먼저 확인한다. 명세 작성법은 guide.', {
+  figures: z.array(z.object({ title: z.string().optional() }).passthrough()).describe('그림 명세 목록 — guide 의 [그림 명세] 참고'),
+  name: z.string().default('지리자료').describe('파일 이름(확장자 제외)'),
+  formats: z.array(z.enum(['pptx', 'hwpx'])).default(['pptx', 'hwpx']),
+  answerKey: z.string().optional().describe(remote ? '정답표 — 원격 서버에서는 파일에 넣지 않고 대화창에만 돌려준다(시험 보안)' : '정답표 — 파일 마지막 장에 들어간다. 첫 줄은 제목'),
+  ...(remote ? {} : { outDir: z.string().optional().describe(`저장 폴더(기본 ${OUT})`) }),
+  style: z.object({ font: z.string().optional(), fontPptx: z.string().optional(), size: z.number().optional(), small: z.number().optional(), width: z.number().optional() }).optional().describe('이번 파일에만 쓸 글꼴·크기(학교 양식)'),
+  confirmed: z.boolean().describe('교사가 계획 요약을 보고 "예"라고 했으면 true'),
+}, wrap(async (a) => {
+  if (!a.confirmed) throw new Error('먼저 계획 요약(지표·연도·지역·가공·기호 순서·출력·출처)을 교사에게 보여 주고 확인을 받으세요.');
+  if (remote && a.figures.length > 12) throw new Error('한 번에 그림은 12장까지 만들 수 있습니다.');
+  const st = { ...loadStyle(), ...(a.style || {}) };
+  const figs = [];
+  for (const f of a.figures) figs.push(await makeFigure(f, st));
+  const safe = String(a.name || '지리자료').replace(/[\/:*?"<>|]/g, '_').slice(0, 60);
+  const dir = remote ? publish.newDir() : (a.outDir || OUT);
+  const paths = exportFigures(figs, { outDir: dir, name: safe, formats: a.formats, answerKey: remote ? undefined : a.answerKey, style: st });
+  const files = remote ? paths.map((p) => publish.url(p)) : paths;
+  return { files, ...(remote ? { expires: `내려받기 주소는 ${publish.keepText} 동안, 한 번만 열립니다(받으면 서버에서 바로 지움). 꼭 내려받아 저장하세요.`, ...(a.answerKey ? { answerKey: a.answerKey, answerKeyNote: '시험 보안을 위해 정답표는 파일에 넣지 않았습니다. 이 내용을 교사에게 그대로 보여 주세요.' } : {}) } : {}), sizes_mm: figs.map((f) => ({ title: f.title, w: round(f.w), h: round(f.h) })), note: 'PPTX: 그림은 묶음 하나 — 묶음 풀기로 지역·막대·글자를 하나씩 고칠 수 있음. HWPX: 그림은 한글 묶음 개체 — 개체 풀기로 같은 방식.' };
+}));
+
+server.tool('set_style', '학교 양식에 맞춘 글꼴·크기·그림 폭을 저장한다(다음부터 기본값).', {
+  font: z.string().optional().describe('한글(HWPX) 그림 글꼴(기본 함초롬돋움)'),
+  fontPptx: z.string().optional().describe('PowerPoint 그림 글꼴(기본 맑은 고딕)'),
+  size: z.number().optional().describe('기본 글자 크기 pt(기본 8)'),
+  small: z.number().optional().describe('작은 글자 pt(기본 7)'),
+  width: z.number().optional().describe('그림 기본 폭 mm(기본 82.5 = 2단 시험지 한 단)'),
+}, wrap((a) => (remote ? '원격 서버에서는 설정을 저장하지 않습니다. 학교 양식은 make_figures 의 style 로 매번 넘기세요.' : saveStyle(Object.fromEntries(Object.entries(a).filter(([, v]) => v != null))))));
+
+const SPEC_HELP = `
+[그림 명세(spec)]
+{ title, layout:'row'|'column', source:'출처 문구', notes:['* 주석'], parts:[ { caption:'(가)', map:{…} } , { caption:'(나)', chart:{…} } ] }
+- 한 부분만이면 parts 없이 { title, map } 또는 { title, chart } 도 된다.
+
+map:
+{ region:'korea'|'world', level:'sido'|'sigungu', within:['서울'], bbox:[서경,남위,동경,북위], detail:'high'|'mid'|'low', width:mm,
+  classes:{ '경북':1, '서울 종로구':3 }   // 단계 번호 0~5 (흰색→빗금→연회색→격자→회색→진회색)
+  legend:['90 미만','90~110', …],        // classes 단계 순서대로
+  labels:{ '경북':'A' },                  // 지역 한가운데에 기호
+  points:[{ lon, lat, label:'A' }],       // 점 + 기호 (도시·기후 지점)
+  flows:[{ from:'경기', to:'서울', value:120 }], // 흐름 화살표(굵기 = 값)
+  graticule:20, scaleBar:true|false, edition:'2026'|'2025' }
+- 시·군·구 이름은 '서울 종로구'처럼 '시·도 짧은이름 + 이름'. list_regions 로 확인.
+
+chart: type = ${Object.keys(CHARTS).join(' | ')} | profile | landform
+- bar/stacked: { categories:[…], series:[{name, values:[…]}], unit:'(%)', valueLabels:'none'|'last'|'all', width, height }
+- scatter/bubble: { points:[{label:'A', x, y, size?}], xLabel, yLabel, sizeLabel }
+- climate: { stations:[{label:'(가)', temp:[12], precip:[12]}], tRange:[-10,30], pRange:[0,300] }
+- deviation: { categories, series:[{name, values}], base:'기준 이름', unit }
+- pyramid: { groups:['0~4',…], male:[%], female:[%], unit:'%' }
+- triangle: { points:[{label, a, b, c}], names:['1차','2차','3차'], unit:'%' }
+- profile(지형 단면, 실제 표고): { from:[위도,경도], to:[위도,경도], labels:[{km, label:'A'}], vex } — 또는 points:[[km,m]…]
+- landform(교과서식 모식도): { preset, labels:{ 부분이름:'A' } } — preset 과 부분: ${Object.entries(LANDFORM_PRESETS).map(([k, v]) => `${k}(${v.title}: ${v.parts.join('·')})`).join(' / ')}
+
+map type 'contour'(등고선 지형도, 실제 표고): { type:'contour', bbox:[서경,남위,동경,북위], interval:m, index:5, points:[{lon,lat,label}], line:[[위도,경도],[위도,경도]](단면선), resolution:70 }
+- 좁은 범위(가로 0.05~0.5°)가 알맞다. 표고는 Terrain Tiles(약 30m, 원자료 SRTM 등)라 아주 작은 지형(사구 등)은 안 보인다.
+`;
+
+return server;
+}
