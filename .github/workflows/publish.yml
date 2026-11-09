@@ -4,6 +4,7 @@ name: publish
 on:
   push:
     tags: ['v*']
+  workflow_dispatch:   # 등록소만 다시 올릴 때 수동 실행(npm 단계는 건너뜀)
 permissions:
   contents: read
   id-token: write
@@ -18,11 +19,15 @@ jobs:
           registry-url: https://registry.npmjs.org
       - run: npm install -g npm@latest
       - name: 태그와 package.json 버전이 같은지 확인
+        if: github.event_name == 'push'
         run: test "v$(node -p "require('./package.json').version")" = "${GITHUB_REF_NAME}"
       - run: npm ci
-      - run: npm publish --access public
+      - if: github.event_name == 'push'
+        run: npm publish --access public
       - name: MCP 공식 등록소에 등록
         run: |
+          V=$(node -p "require('./package.json').version")
+          for i in $(seq 1 30); do [ "$(npm view geo-figure-mcp@$V version 2>/dev/null)" = "$V" ] && break; echo "npm 반영 기다리는 중($i)"; sleep 20; done
           curl -sL "https://github.com/modelcontextprotocol/registry/releases/download/v1.8.8/mcp-publisher_linux_amd64.tar.gz" | tar xz mcp-publisher
           ./mcp-publisher login github-oidc
           ./mcp-publisher publish
