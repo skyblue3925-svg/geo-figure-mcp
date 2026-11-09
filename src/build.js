@@ -56,6 +56,9 @@ export async function makeFigure(spec, st = loadStyle()) {
     placed.push(S.group(p.caption ? `자료 ${p.caption}` : '자료', shift(items, x, y)));
     if (row) x += b.w + gap; else y += b.h + (p.caption ? 5 : 0) + gap;
   }
+  // 묶음을 한 겹으로 편다: 파일에서는 그림 전체가 묶음 하나이고, 한 번 풀면 시군구·기호·선·범례가 모두 따로 움직인다
+  const flat = (arr) => arr.flatMap((it) => (it.t === 'group' ? flat(it.items) : [it]));
+  if (spec.grouping !== 'nested') placed.splice(0, placed.length, ...flat(placed));
   const source = [spec.source, ...[...cites].filter((c) => !(spec.source || '').includes(c.slice(0, 14)))].filter(Boolean).join('; ');
   return withFooter(figure({ title: spec.title, items: placed, source, notes: spec.notes }), st);
 }

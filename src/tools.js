@@ -20,6 +20,7 @@ const GUIDE = `
 3. 만들기 전에 반드시 '계획 요약'을 보여 주고 교사의 "예"를 받는다:
    지표·단위 / 기준 연도 / 지역과 기호(A~E 또는 (가)~(마)) / 가공(지수·비율·편차·반올림) / 기호 순서(무작위·북→남·서→동·지정) / 출력(PPTX·HWPX) / 출처 문구
 4. make_figures 로 만들고, 파일 위치(원격이면 내려받기 주소)와 정답표를 알려 준다.
+5. 만든 뒤 고치기(범례·단계·지역·기호·순서): open_figure_spec 으로 설계도를 읽어 그 부분만 바꾸고 make_figures 를 다시 부른다. 통계를 다시 찾지 않는다. 손으로 고칠 땐 그룹 해제(개체 풀기) 한 번이면 모든 도형이 따로 움직인다고 알려 준다.
 
 [품질 규칙 — 교사 기준 + 경기도교육청 지리 문항 제작 자료]
 - 흑백 인쇄로 구분돼야 한다: 색 대신 빗금·회색 농도(자동).
@@ -115,7 +116,24 @@ server.tool('make_figures', '그림 명세로 PPTX·HWPX 파일을 만든다. �
   const dir = remote ? publish.newDir() : (a.outDir || OUT);
   const paths = exportFigures(figs, { outDir: dir, name: safe, formats: a.formats, answerKey: remote ? undefined : a.answerKey, style: st });
   const files = remote ? paths.map((p) => publish.url(p)) : paths;
-  return { files, ...(remote ? { expires: `내려받기 주소는 ${publish.keepText} 동안, 한 번만 열립니다(받으면 서버에서 바로 지움). 꼭 내려받아 저장하세요.`, ...(a.answerKey ? { answerKey: a.answerKey, answerKeyNote: '시험 보안을 위해 정답표는 파일에 넣지 않았습니다. 이 내용을 교사에게 그대로 보여 주세요.' } : {}) } : {}), sizes_mm: figs.map((f) => ({ title: f.title, w: round(f.w), h: round(f.h) })), note: 'PPTX: 그림은 묶음 하나 — 묶음 풀기로 지역·막대·글자를 하나씩 고칠 수 있음. HWPX: 그림은 한글 묶음 개체 — 개체 풀기로 같은 방식.' };
+  // 고치기용 설계도: 같은 폴더에 <이름>.geo-figure.json — 나중에 open_figure_spec 으로 읽어 일부만 바꿔 다시 만든다
+  let specFile = null;
+  if (!remote) { specFile = path.join(dir, `${safe}.geo-figure.json`); fs.writeFileSync(specFile, JSON.stringify({ name: safe, formats: a.formats, style: a.style, answerKey: a.answerKey, figures: a.figures }, null, 1)); }
+  return { files, ...(remote ? { expires: `내려받기 주소는 ${publish.keepText} 동안, 한 번만 열립니다(받으면 서버에서 바로 지움). 꼭 내려받아 저장하세요.`, ...(a.answerKey ? { answerKey: a.answerKey, answerKeyNote: '시험 보안을 위해 정답표는 파일에 넣지 않았습니다. 이 내용을 교사에게 그대로 보여 주세요.' } : {}) } : {}), sizes_mm: figs.map((f) => ({ title: f.title, w: round(f.w), h: round(f.h) })), ...(specFile ? { specFile } : {}), note: '그림마다 묶음 하나 — PPTX는 그룹 해제, HWPX는 개체 풀기를 한 번만 하면 시군구·기호·선·범례가 모두 따로 움직인다(도형 이름이 지역 이름). 범례 칸과 지역은 같은 무늬라 서식 복사로 단계를 바꿀 수 있다. 범례·지역·기호를 크게 바꾸려면 open_figure_spec 으로 설계도를 읽어 고친 뒤 make_figures 를 다시 부른다.' };
+}));
+
+if (!remote) server.tool('open_figure_spec', '이미 만든 그림의 설계도(make_figures 가 저장한 <이름>.geo-figure.json)를 읽는다. "범례 바꿔 줘", "이 지역 빼 줘", "기호 순서 바꿔 줘" 같은 수정 요청은 이것을 읽어 필요한 부분만 고친 뒤 make_figures 를 다시 부른다(통계를 다시 찾지 않는다).', {
+  path: z.string().optional().describe('설계도 파일 경로. 비우면 저장 폴더에서 가장 최근 것'),
+  name: z.string().optional().describe('파일 이름(확장자 제외)으로 찾기'),
+}, wrap((a) => {
+  let f = a.path;
+  if (!f) {
+    const list = fs.existsSync(OUT) ? fs.readdirSync(OUT).filter((n) => n.endsWith('.geo-figure.json') && (!a.name || n.startsWith(a.name))) : [];
+    if (!list.length) throw new Error(`설계도가 없습니다(${OUT}). path 로 직접 알려 주세요.`);
+    list.sort((x, y) => fs.statSync(path.join(OUT, y)).mtimeMs - fs.statSync(path.join(OUT, x)).mtimeMs);
+    f = path.join(OUT, list[0]);
+  }
+  return { file: f, spec: JSON.parse(fs.readFileSync(f, 'utf8')), how: '이 spec 에서 바꿀 부분만 고쳐 make_figures(confirmed:true, 같은 name 또는 새 name)에 넘긴다.' };
 }));
 
 server.tool('set_style', '학교 양식에 맞춘 글꼴·크기·그림 폭을 저장한다(다음부터 기본값).', {
@@ -136,6 +154,7 @@ map:
   classes:{ '경북':1, '서울 종로구':3 }   // 단계 번호 0~5 (흰색→빗금→연회색→격자→회색→진회색)
   legend:['90 미만','90~110', …],        // classes 단계 순서대로
   labels:{ '경북':'A' },                  // 지역 한가운데에 기호
+  labelBox: false,                        // true 면 기호 뒤에 흰 바탕(기본은 바탕 없음 — 무늬를 가리지 않는다)
   points:[{ lon, lat, label:'A' }],       // 점 + 기호 (도시·기후 지점)
   flows:[{ from:'경기', to:'서울', value:120 }], // 흐름 화살표(굵기 = 값)
   graticule:20, scaleBar:true|false, edition:'2026'|'2025' }

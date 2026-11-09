@@ -157,7 +157,7 @@ export function pyramidChart(spec, st = DEFAULT_STYLE) {
 
 // 삼각 그래프. spec: { points:[{label,a,b,c}], names:[a,b,c] } — a 아래왼쪽, b 위, c 아래오른쪽 꼭짓점 (합 100)
 export function triangleChart(spec, st = DEFAULT_STYLE) {
-  const s = spec.side || 55, h = (s * Math.sqrt(3)) / 2, ox = 8, oy = 6;
+  const s = spec.side || 55, h = (s * Math.sqrt(3)) / 2, ox = 22, oy = 6;
   const P = (a, b, c) => { const t = a + b + c; return [ox + s * (c / t) + s * 0.5 * (b / t), oy + h - h * (b / t)]; };
   const items = [S.poly([[P(100, 0, 0), P(0, 100, 0), P(0, 0, 100)]], { stroke: st.line, name: '삼각형' })];
   const grid = [];
@@ -167,10 +167,23 @@ export function triangleChart(spec, st = DEFAULT_STYLE) {
     grid.push(S.line([P(100 - k, 0, k), P(0, 100 - k, k)], { stroke: 0.1, gray: '#808080', name: '눈금선' }));
   }
   items.push(S.group('눈금선', grid));
-  const [na, nb, nc] = spec.names;
-  items.push(S.text(P(100, 0, 0)[0] - 1, P(100, 0, 0)[1] + 3, na, { size: st.small, anchor: 'r' }), S.text(P(0, 100, 0)[0], oy - 3, nb, { size: st.small }), S.text(P(0, 0, 100)[0] + 1, P(0, 0, 100)[1] + 3, nc, { size: st.small, anchor: 'l' }));
-  spec.points.forEach((p) => { const [x, y] = P(+p.a, +p.b, +p.c); items.push(S.group(`점 ${p.label}`, [S.dot(x, y, 0.9), S.text(x + 1.6, y - 1.6, p.label, { size: st.size, bold: true, anchor: 'l' })])); });
-  if (spec.unit) items.push(S.text(ox + s, oy + h + 7, `(단위: ${spec.unit})`, { size: st.small - 1, anchor: 'r' }));
+  const [na, nb, nc] = spec.names || spec.axes || ['A', 'B', 'C'];
+  const u = spec.unit || '%';
+  const fs = st.small - 1.5;
+  // 눈금 숫자: a(왼쪽 아래 꼭짓점이 100)는 아랫변, b(위 꼭짓점이 100)는 왼쪽 변, c(오른쪽 아래 꼭짓점이 100)는 오른쪽 변에 적는다
+  for (let k = 0; k <= 100; k += 20) {
+    const pa = P(k, 0, 100 - k); items.push(S.text(pa[0], pa[1] + 2.2, String(k), { size: fs, name: `눈금 ${na} ${k}` }));
+    const pb = P(100 - k, k, 0); items.push(S.text(pb[0] - 1.2, pb[1], String(k), { size: fs, anchor: 'r', name: `눈금 ${nb} ${k}` }));
+    const pc = P(0, 100 - k, k); items.push(S.text(pc[0] + 1.2, pc[1], String(k), { size: fs, anchor: 'l', name: `눈금 ${nc} ${k}` }));
+  }
+  // 축 이름과 커지는 방향
+  const mid = (p, q) => [(p[0] + q[0]) / 2, (p[1] + q[1]) / 2];
+  const A = P(100, 0, 0), B = P(0, 100, 0), C = P(0, 0, 100);
+  const mb = mid(A, C), ml = mid(A, B), mr = mid(B, C);
+  items.push(S.text(mb[0], mb[1] + 6, `← ${na}(${u})`, { size: st.small, name: `축 ${na}` }));
+  items.push(S.text(ml[0] - 7, ml[1], `${nb}(${u}) ↑`, { size: st.small, anchor: 'r', name: `축 ${nb}` }));
+  items.push(S.text(mr[0] + 7, mr[1], `↓ ${nc}(${u})`, { size: st.small, anchor: 'l', name: `축 ${nc}` }));
+  spec.points.forEach((p) => { const [va, vb, vc] = p.values || [p.a, p.b, p.c]; const [x, y] = P(+va, +vb, +vc); items.push(S.group(`점 ${p.label}`, [S.dot(x, y, 0.9), S.text(x + 1.6, y - 1.6, p.label, { size: st.size, bold: true, anchor: 'l' })])); });
   return items;
 }
 

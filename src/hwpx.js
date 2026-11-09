@@ -175,6 +175,9 @@ export function buildHwpx(figs, opts = {}) {
   const P = (inner, pp) => `<hp:p id="0" paraPrIDRef="${pp}" styleIDRef="0" pageBreak="0" columnBreak="0" merged="0">${inner}</hp:p>`;
   const cTitle = charPr(10, true), cBody = charPr(10, false);
   const body = [];
+  // 쪽에 다 안 들어가는 그림은 제목부터 다음 쪽으로 넘긴다(넘치면 한글이 그림을 앞 그림 위에 겹쳐 놓는다)
+  const USABLE = PAGE_H - 2 * MT - u(5) - u(7) - u(6);
+  let used = 0;
   figs.forEach((f, k) => {
     // 개체가 묶음 밖으로 나가면 한글이 묶음을 줄여 버린다 → 실제 범위를 재고, 음수면 옮겨서 다시 만든다
     // 한글은 '하나짜리 묶음'을 풀지 못한다 → 그림 안이 묶음 하나뿐이면 한 겹 벗긴다
@@ -190,7 +193,10 @@ export function buildHwpx(figs, opts = {}) {
     const W = Math.max(u(f.w), ext[2]), H = Math.max(u(f.h), ext[3]);
     const cont = `<hp:container id="${next()}" zOrder="${k}" numberingType="PICTURE" textWrap="IN_FRONT_OF_TEXT" textFlow="BOTH_SIDES" lock="0" dropcapstyle="None" href="" groupLevel="0" instid="${next()}"><hp:offset x="0" y="0"/><hp:orgSz width="${W}" height="${H}"/><hp:curSz width="0" height="0"/><hp:flip horizontal="0" vertical="0"/><hp:rotationInfo angle="0" centerX="${Math.round(W / 2)}" centerY="${Math.round(H / 2)}" rotateimage="1"/><hp:renderingInfo><hc:transMatrix ${I}/><hc:scaMatrix ${I}/><hc:rotMatrix ${I}/></hp:renderingInfo>${objs.join('')}<hp:sz width="${W}" widthRelTo="ABSOLUTE" height="${H}" heightRelTo="ABSOLUTE" protect="0"/><hp:pos treatAsChar="0" affectLSpacing="0" flowWithText="1" allowOverlap="1" holdAnchorAndSO="0" vertRelTo="PARA" horzRelTo="COLUMN" vertAlign="TOP" horzAlign="LEFT" vertOffset="0" horzOffset="0"/><hp:outMargin left="0" right="0" top="0" bottom="${u(4)}"/><hp:shapeComment>${esc(f.title || '그림')}</hp:shapeComment></hp:container>`;
     const first = k === 0 ? secPr() : '';
-    body.push(P(`<hp:run charPrIDRef="${cTitle}">${first}<hp:t>${esc(f.title || '')}</hp:t></hp:run>`, paraPr('LEFT', 130, u(2))));
+    const need = u(8) + H + u(8);
+    const brk = k > 0 && used + need > USABLE;
+    used = brk ? need : used + need;
+    body.push(P(`<hp:run charPrIDRef="${cTitle}">${first}<hp:t>${esc(f.title || '')}</hp:t></hp:run>`, paraPr('LEFT', 130, u(2))).replace('pageBreak="0"', `pageBreak="${brk ? 1 : 0}"`));
     // 그림은 '글 앞으로' 띄우고, 그림 높이만큼 고정 높이 문단으로 자리를 비운다 → 묶음을 풀어도 조각이 밀리지 않는다
     body.push(P(`<hp:run charPrIDRef="${cBody}">${cont}<hp:t/></hp:run>`, paraPr('LEFT', 100, u(8), H)));
   });
