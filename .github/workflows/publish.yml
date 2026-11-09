@@ -1,0 +1,28 @@
+# 버전 태그(v0.2.1 등)를 올리면 npm 과 MCP 공식 등록소에 자동으로 올린다.
+# npm 은 신뢰할 수 있는 게시(Trusted Publishing, OIDC) — 저장소에 비밀 키를 두지 않는다.
+name: publish
+on:
+  push:
+    tags: ['v*']
+permissions:
+  contents: read
+  id-token: write
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          registry-url: https://registry.npmjs.org
+      - run: npm install -g npm@latest
+      - name: 태그와 package.json 버전이 같은지 확인
+        run: test "v$(node -p "require('./package.json').version")" = "${GITHUB_REF_NAME}"
+      - run: npm ci
+      - run: npm publish --access public
+      - name: MCP 공식 등록소에 등록
+        run: |
+          curl -sL "https://github.com/modelcontextprotocol/registry/releases/download/v1.8.8/mcp-publisher_linux_amd64.tar.gz" | tar xz mcp-publisher
+          ./mcp-publisher login github-oidc
+          ./mcp-publisher publish
