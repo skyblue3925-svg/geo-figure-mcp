@@ -47,6 +47,6 @@ export function buildSvg(fig, style = DEFAULT_STYLE) {
 
 // PNG(가로 px). 글꼴은 이 컴퓨터에 깔린 한글 글꼴을 쓴다.
 export function renderPng(fig, { width = 900, style } = {}) {
-  const r = new Resvg(buildSvg(fig, style), { fitTo: { mode: 'width', value: width }, font: { loadSystemFonts: true, defaultFontFamily: 'Malgun Gothic' }, background: '#FFFFFF' });
+  const r = new Resvg(buildSvg(fig, style), { fitTo: { mode: 'width', value: width }, font: { loadSystemFonts: true, defaultFontFamily: process.platform === 'linux' ? 'Noto Sans CJK KR' : 'Malgun Gothic' }, background: '#FFFFFF' });
   return r.render().asPng();
 }
