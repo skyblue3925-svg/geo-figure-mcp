@@ -10,7 +10,7 @@ import { unzipSync, strFromU8 } from 'fflate';
 import { makeFigure, exportFigures } from '../src/build.js';
 import { renderPng } from '../src/svg.js';
 import { LANDFORM_PRESETS } from '../src/terrain.js';
-import { listRegions } from '../src/maps.js';
+import { listRegions, makeMap } from '../src/maps.js';
 import { findData, examSpots } from '../src/data.js';
 
 let fail = 0;
@@ -43,12 +43,23 @@ ok(tri && tri.items.some((it) => it.t === 'text' && /^눈금/.test(it.name || ''
 // 지도 출처 자동 표시
 ok(figs[0].items.some((it) => it.t === 'text' && /SGIS/.test(it.str)), '한국 지도 출처(SGIS) 자동 표시');
 
+const worldMap = makeMap({ region: 'world' });
+const gridName = '위·경도선과 눈금';
+const gridIndex = worldMap.findIndex((item) => item.name === gridName);
+const grid = worldMap[gridIndex]?.items || [];
+ok(gridIndex > worldMap.findIndex((item) => item.name === '국가') && grid.some((item) => item.t === 'line'),
+  '세계지도: 위·경도선이 국가 채움 위에 표시됨');
+ok(grid.some((item) => item.name === '경도 눈금' && item.str === '60°E') && grid.some((item) => item.name === '위도 눈금' && item.str === '30°N'),
+  '세계지도: 위도와 경도 눈금 기본 표시');
+ok(!makeMap({ region: 'world', graticule: 0 }).some((item) => item.name === gridName), '세계지도: 위·경도선과 눈금 숨김');
+
 // 파일
 const files = exportFigures(figs, { outDir: out, name: '검사', answerKey: '정답표\nA = 가' });
 for (const f of files) {
   const z = unzipSync(fs.readFileSync(f));
   const xml = Object.entries(z).filter(([n]) => n.endsWith('.xml')).map(([, b]) => strFromU8(b)).join('');
   ok(Object.keys(z).length > 3 && !/NaN|Infinity|undefined/.test(xml), `${path.basename(f)}: 열 수 있는 구조(NaN·Infinity 없음)`);
+  ok(xml.includes('60°E') && xml.includes('30°N'), '세계지도: 위·경도 눈금이 파일에 포함됨');
   ok(xml.includes('정답표'), `${path.basename(f)}: 정답표 마지막 장`);
 }
 const hx = strFromU8(unzipSync(fs.readFileSync(files.find((f) => f.endsWith('.hwpx'))))['Contents/section0.xml']);

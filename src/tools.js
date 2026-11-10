@@ -337,7 +337,8 @@ map:
   labelStyle: 'halo',                     // 기호 글자: halo(흰 테두리, 기본) | plain(바탕 없음) | box(네모 흰 바탕) | circle(작은 원 흰 바탕)
   points:[{ lon, lat, label:'A' }],       // 점 + 기호 (도시·기후 지점)
   flows:[{ from:'경기', to:'서울', value:120 }], // 흐름 화살표(굵기 = 값)
-  graticule:20, scaleBar:true|false, edition:'2026'|'2025' }
+  graticule:20,                          // 세계지도 위·경도선 간격(도). 생략하면 자동, 0이면 선과 눈금 모두 숨김
+  scaleBar:true|false, edition:'2026'|'2025' }
 - 시·군·구 이름은 '서울 종로구'처럼 '시·도 짧은이름 + 이름'. 필요할 때 list_regions에 query와 edition으로 확인.
 `,
   chart: `

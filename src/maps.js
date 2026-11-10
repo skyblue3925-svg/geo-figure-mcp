@@ -116,11 +116,7 @@ export function makeMap(spec, st = DEFAULT_STYLE) {
   const path = geoPath(proj);
 
   const items = [];
-  if (!isKorea && spec.graticule !== 0) {
-    const step = spec.graticule || 10;
-    const gl = lines(path, geoGraticule().step([step, step])());
-    items.push(S.group('위·경도선', gl.map((l) => S.line(l, { stroke: 0.12, dash: 'sysDash', gray: '#7F7F7F', name: '위·경도선' }))));
-  }
+
   // 단계 구분에 지도에 없는 이름이 있으면 조용히 빠지지 않게 알린다
   if (spec.classes) {
     const bad = Object.keys(spec.classes).filter((n) => !feats.some((f) => f.full === n || f.name === n || f.id === n));
@@ -136,6 +132,10 @@ export function makeMap(spec, st = DEFAULT_STYLE) {
     areas.push(S.poly(rs, { fill, stroke: inFocus.has(f) ? 0.2 : 0.12, name: f.full }));
   }
   items.push(S.group(isKorea ? '행정 구역' : '국가', areas));
+  if (!isKorea && spec.graticule !== 0) {
+    const step = spec.graticule || (!spec.bbox || spec.bbox[2] - spec.bbox[0] > 150 ? 30 : 10);
+    items.push(worldGrid(path, step, st));
+  }
   const isSigungu = spec.level === 'sigungu';
   if (isKorea && (isSigungu || spec.within?.length)) {
     const sidos = isSigungu ? koreaFeatures('sido', detail, spec.edition) : feats;
@@ -199,6 +199,40 @@ export function makeMap(spec, st = DEFAULT_STYLE) {
   if (spec.scaleBar ?? !whole) items.push(scaleBar(proj, W, H, st));
   if (spec.legend?.length) items.push(spec.within || spec.bbox ? rowLegend(spec.legend, H, st) : classLegend(spec.legend, W, H, st));
   return items;
+}
+
+function worldGrid(path, step, st) {
+  const grid = [], meridians = [], parallels = [];
+  for (const line of geoGraticule().step([step, step]).lines()) {
+    const [first, second] = line.coordinates;
+    const meridian = first[0] === second[0];
+    const angle = +first[meridian ? 0 : 1].toFixed(8);
+    const segments = lines(path, line);
+    if (!segments.length) continue;
+    const points = segments.flat();
+    const x = Math.min(...points.map((p) => p[0]));
+    const y = Math.min(...points.map((p) => p[1]));
+    const suffix = angle === 0 || Math.abs(angle) === 180 ? '' : meridian ? (angle < 0 ? 'W' : 'E') : (angle < 0 ? 'S' : 'N');
+    const label = Math.abs(angle) + '°' + suffix;
+    const size = st.small;
+    if (meridian) {
+      meridians.push({ angle, at: x, span: textWidth(label, size), item: S.text(x, y - 1.2, label, { size, v: 'b', name: '경도 눈금' }) });
+    } else {
+      parallels.push({ angle, at: y, span: size * 0.3528 * 1.25, item: S.text(x - 1.2, y, label, { size, anchor: 'r', name: '위도 눈금' }) });
+    }
+    for (const pts of segments) grid.push(S.line(pts, { stroke: 0.25, dash: 'sysDash', gray: '#707070', name: '위·경도선' }));
+  }
+  // 눈금 글자가 겹치면 적도와 본초 자오선에 가까운 눈금을 우선한다.
+  for (const ticks of [meridians, parallels]) {
+    const placed = [];
+    ticks.sort((a, b) => Math.abs(a.angle) - Math.abs(b.angle));
+    for (const tick of ticks) {
+      if (placed.some((p) => Math.abs(p.at - tick.at) < (p.span + tick.span) / 2 + 1)) continue;
+      placed.push(tick);
+      grid.push(tick.item);
+    }
+  }
+  return S.group('위·경도선과 눈금', grid);
 }
 
 function scaleBar(proj, W, H, st) {
