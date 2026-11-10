@@ -2,6 +2,7 @@
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import { randomBytes } from 'node:crypto';
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
 import { SOURCES, findData, transform, round, assignLabels, suggestRegions, examSpots, kosisSearch, kosisItems, setKosisKey, bundleList, withKosisKey } from './data.js';
@@ -25,15 +26,15 @@ export const OUT = process.env.GEO_FIGURE_OUT || path.join(os.homedir(), 'Docume
 const GUIDE = `
 [작업 순서 — 반드시 지킨다]
 1. 교사의 말에서 지도·그래프 종류, 지표, 지역, 연도를 읽는다. 모르면 기본값을 채운다.
-2. find_data 로 실제 통계를 찾는다. 한국 시·도·시·군·구 통계는 먼저 list_bundled_data(키 필요 없음)를 보고, 없을 때만 KOSIS(키 필요)를 쓴다. 숫자를 지어내지 않는다. 못 찾으면 [확인 필요]로 알리고 교사에게 숫자를 받는다.
+2. find_data 로 실제 통계를 찾는다. 한국 시·도·시·군·구 통계는 먼저 list_bundled_data에 query와 summary:true를 보내 후보를 찾고, 없을 때만 KOSIS(키 필요)를 쓴다. 숫자를 지어내지 않는다. 못 찾으면 [확인 필요]로 알리고 교사에게 숫자를 받는다.
 3. 만들기 전에 반드시 '계획 요약'을 보여 주고 교사의 "예"를 받는다:
    지표·단위 / 기준 연도 / 지역과 기호(A~E 또는 (가)~(마)) / 가공(지수·비율·편차·반올림) / 기호 순서(무작위·북→남·서→동·지정) / 출력(PPTX·HWPX) / 출처 문구
-4. 계획 요약과 함께 preview_figures 로 시안 그림을 보여 준다. 지도 기호 스타일을 교사가 정하지 않았으면 compareLabelStyles:true 로 4가지를 보여 주고 고르게 한다. 교사가 ‘예’라고 하면 make_figures 로 만들고, 파일 위치(원격이면 내려받기 주소)와 정답표를 알려 준다.
+4. 계획 요약과 함께 preview_figures 로 시안 그림을 보여 준다. 그림마다 기본 시안을 보여 주고, 기호를 비교할 때만 compareLabelStyles:true를 쓴다. 교사가 ‘예’라고 하면 make_figures로 만든다. 로컬에서 명세가 같으면 figures 대신 previewId를 쓴다. 파일 위치와 정답표를 알려 준다.
 5. 만든 뒤 고치기(범례·단계·지역·기호·순서): open_figure_spec 으로 설계도를 읽어 그 부분만 바꾸고 make_figures 를 다시 부른다. 통계를 다시 찾지 않는다. 손으로 고칠 땐 그룹 해제(개체 풀기) 한 번이면 모든 도형이 따로 움직인다고 알려 준다.
 
 [품질 규칙 — 교사 기준 + 경기도교육청 지리 문항 제작 자료]
 - 흑백 인쇄로 구분돼야 한다: 색 대신 빗금·회색 농도(자동).
-- 정답 단서를 드러내지 않는다: 지명·국가명은 기호로 바꾸고, 정답표는 파일 마지막 장에 둔다.
+- 정답 단서를 드러내지 않는다: 지명·국가명은 기호로 바꾸고, 정답표는 로컬 파일 마지막 장 또는 원격 응답에 둔다.
 - 경계는 자료 연도에 맞춘다: 2026년 7월 이후 자료는 2026년 판(16개 시·도, '전남광주'), 그 전 자료는 map.edition:'2025'(17개 시·도). 내장 자료는 mapEdition 과 mapName 을 알려 준다.
 - 출처와 기준 연도를 꼭 적는다: 출처는 그림 오른쪽 아래(자동). 지도 출처도 함께.
 - 전도(세계·대륙·우리나라 전체)가 아닌 지도에는 축척을 넣는다(자동).
@@ -42,15 +43,40 @@ const GUIDE = `
 - 판별용 지역은 suggest_regions 로 서로 잘 갈리는 곳을 고른다.
 `;
 
+const INSTRUCTIONS = [
+  '지리 시험 자료는 실제 통계와 출처를 쓴다. 한국 자료는 list_bundled_data에 query와 summary:true를 보내 먼저 찾는다.',
+  '지표·연도·지역·가공·기호·출력·출처와 시안을 제시하고 교사 확인 후 make_figures를 부른다.',
+  '기호를 비교할 때만 4종 시안을 요청한다. 로컬에서 명세가 같으면 previewId를 재사용한다.',
+  '행정구역 판은 자료 연도에 맞춘다. 정답표는 로컬 파일 마지막 장 또는 원격 응답에 둔다.',
+  '필요할 때 guide의 topic으로 workflow 또는 spec을 선택한다.',
+].join('\n');
+const PREVIEW_TTL_MS = 30 * 60 * 1000;
+const MAX_PREVIEWS = 8;
+const MAX_PREVIEW_SPEC_BYTES = 64 * 1024;
+const figureSpecs = z.array(z.object({ title: z.string().optional() }).passthrough());
+const figureStyle = z.object({ font: z.string().optional(), fontPptx: z.string().optional(), size: z.number().optional(), small: z.number().optional(), width: z.number().optional() });
+const LABEL_NAMES = { halo: '① 흰 테두리(기본)', plain: '② 바탕 없음', box: '③ 네모 흰 바탕', circle: '④ 작은 원 흰 바탕' };
+const hasMap = (f) => f.map || f.parts?.some((p) => p.map);
+const withLabelStyle = (f, labelStyle) => {
+  const apply = (p) => p.map ? { ...p, map: { ...p.map, labelStyle } } : p;
+  return f.parts ? { ...f, parts: f.parts.map(apply) } : apply(f);
+};
+
 export function createServer({ remote = false, publish = null } = {}) {
-const server = new McpServer({ name: 'geo-figure-mcp', version: PKG_VERSION }, { instructions: `지리 시험용 지도·그래프 제작 도구.\n${GUIDE}` });
-const ok = (obj) => ({ content: [{ type: 'text', text: typeof obj === 'string' ? obj : JSON.stringify(obj, null, 1) }] });
-const fail = (e) => ({ isError: true, content: [{ type: 'text', text: `오류: ${e.message || e}` }] });
+const server = new McpServer({ name: 'geo-figure-mcp', version: PKG_VERSION }, { instructions: INSTRUCTIONS });
+const previews = new Map();
+const ok = (obj) => ({ content: [{ type: 'text', text: typeof obj === 'string' ? obj : JSON.stringify(obj) }] });
+const fail = (e) => ({ isError: true, content: [{ type: 'text', text: '오류: ' + (e.message || e) }] });
 const wrap = (fn) => async (a) => { try { return ok(await fn(a)); } catch (e) { return fail(e); } };
 
-server.tool('guide', '이 도구의 작업 순서와 시험 자료 품질 규칙, 그림 명세(spec) 작성법을 돌려준다. 처음 쓸 때 먼저 부른다.', {}, wrap(() => (updateNotice() ? `[알림] ${updateNotice()}
-` : '') + `geo-figure-mcp ${PKG_VERSION}
-` + GUIDE + SPEC_HELP));
+server.tool('guide', '필요할 때 제작 순서(workflow) 또는 그림 명세(spec)를 조회한다. 인자 없이 호출하면 둘 다 반환한다.', {
+  topic: z.enum(['workflow', 'spec']).optional(),
+}, wrap(({ topic }) => [
+  updateNotice(),
+  'geo-figure-mcp ' + PKG_VERSION,
+  topic !== 'spec' && GUIDE,
+  topic !== 'workflow' && SPEC_HELP,
+].filter(Boolean).join('\n')));
 
 server.tool('list_sources', '쓸 수 있는 통계 자료원과 지표 예시를 보여 준다.', {}, wrap(() => SOURCES));
 
@@ -68,7 +94,17 @@ server.tool('list_exam_climate_spots', '평가원 기후 기출 지점(2022~2026
   code: z.string().optional().describe("기후 기호로 거르기. 예: 'Cs', 'BW', 'Df'"),
 }, wrap((a) => examSpots().filter((s) => !a.code || (s.code || '').startsWith(a.code)).map((s) => ({ name: s.name, code: s.code, exams: s.exams, lat: s.lat, lon: s.lon, data: s.climate ? s.climate.source : (s.lat == null ? '좌표 없음' : 'WMO') }))));
 
-server.tool('list_bundled_data', '키 없이 쓰는 내장 KOSIS 통계 목록(주제·기간·항목·분류). KOSIS 를 직접 부르기 전에 먼저 여기서 찾는다.', {}, wrap(() => bundleList()));
+server.tool('list_bundled_data', '내장 KOSIS 통계 목록. query로 찾고 summary:true로 키와 주제만 본다. 선택한 키로 다시 조회하면 항목과 기간을 볼 수 있다.', {
+  query: z.string().optional().describe('표 키 또는 검색어'),
+  summary: z.boolean().optional().describe('키와 주제만 반환'),
+}, wrap(({ query, summary }) => {
+  const terms = query?.toLowerCase().trim().split(/\s+/).filter(Boolean) || [];
+  const tables = bundleList().filter(({ key, topic, title, items }) => {
+    const text = [key, topic, title, ...items].join(' ').toLowerCase();
+    return terms.every((term) => text.includes(term));
+  });
+  return summary ? tables.map(({ key, topic }) => ({ key, topic })) : tables;
+}));
 
 if (!remote) {
 server.tool('kosis_search', 'KOSIS 국가통계포털에서 통계표를 찾는다(시·도·시·군·구 통계). 인증키 필요 — 먼저 list_bundled_data 를 본다.', {
@@ -110,48 +146,77 @@ server.tool('assign_labels', '지역 이름을 A~E 또는 (가)~(마) 기호로 
 }, wrap((a) => assignLabels(a.names, a)));
 
 server.tool('make_figures', '그림 명세로 PPTX·HWPX 파일을 만든다. 만들기 전에 교사에게 계획 요약을 보여 주고 확인을 받았는지 먼저 확인한다. 명세 작성법은 guide.', {
-  figures: z.array(z.object({ title: z.string().optional() }).passthrough()).describe('그림 명세 목록 — guide 의 [그림 명세] 참고'),
+  figures: (remote ? figureSpecs : figureSpecs.optional()).describe('그림 명세 목록. guide의 spec 참고'),
+  ...(remote ? {} : {
+    previewId: z.string().optional().describe('명세가 같으면 figures 대신 로컬 시안 ID'),
+    labelStyle: z.enum(['halo', 'plain', 'box', 'circle']).optional().describe('기호 비교 시안에서 교사가 선택한 스타일'),
+  }),
   name: z.string().default('지리자료').describe('파일 이름(확장자 제외)'),
   formats: z.array(z.enum(['pptx', 'hwpx'])).default(['pptx', 'hwpx']),
   answerKey: z.string().optional().describe(remote ? '정답표 — 원격 서버에서는 파일에 넣지 않고 대화창에만 돌려준다(시험 보안)' : '정답표 — 파일 마지막 장에 들어간다. 첫 줄은 제목'),
   ...(remote ? {} : { outDir: z.string().optional().describe(`저장 폴더(기본 ${OUT})`) }),
-  style: z.object({ font: z.string().optional(), fontPptx: z.string().optional(), size: z.number().optional(), small: z.number().optional(), width: z.number().optional() }).optional().describe('이번 파일에만 쓸 글꼴·크기(학교 양식)'),
+  style: figureStyle.optional().describe('이번 파일에만 쓸 글꼴·크기(학교 양식)'),
   confirmed: z.boolean().describe('교사가 계획 요약을 보고 "예"라고 했으면 true'),
 }, wrap(async (a) => {
   if (!a.confirmed) throw new Error('먼저 계획 요약(지표·연도·지역·가공·기호 순서·출력·출처)을 교사에게 보여 주고 확인을 받으세요.');
-  if (remote && a.figures.length > 12) throw new Error('한 번에 그림은 12장까지 만들 수 있습니다.');
-  const st = { ...loadStyle(), ...(a.style || {}) };
+  let { figures, style } = a;
+  let st;
+  if (a.previewId !== undefined) {
+    if (figures !== undefined || style !== undefined) throw new Error('previewId는 figures 또는 style과 함께 쓸 수 없습니다. 명세를 바꾸려면 새 시안을 만드세요.');
+    const preview = previews.get(a.previewId);
+    if (!preview || preview.expires <= Date.now()) {
+      previews.delete(a.previewId);
+      throw new Error('시안 ID가 만료되었거나 없습니다. 다시 시안을 만들거나 원래 figures를 보내세요.');
+    }
+    if (a.labelStyle && preview.compareIndex < 0) throw new Error('labelStyle은 기호 비교 시안 ID와 함께 쓸 수 있습니다.');
+    if (preview.compareIndex >= 0 && !a.labelStyle) throw new Error('기호 비교 시안에서는 교사가 선택한 labelStyle을 지정하세요.');
+    ({ figures, style, st } = preview);
+    if (a.labelStyle) figures = figures.map((f, i) => i === preview.compareIndex ? withLabelStyle(f, a.labelStyle) : f);
+  } else if (!figures || a.labelStyle !== undefined) {
+    throw new Error('figures 또는 로컬 previewId를 보내세요. labelStyle은 지도 명세 안에 지정할 수 있습니다.');
+  }
+  if (remote && figures.length > 12) throw new Error('한 번에 그림은 12장까지 만들 수 있습니다.');
+  st ??= { ...loadStyle(), ...style };
   const figs = [];
-  for (const f of a.figures) figs.push(await makeFigure(f, st));
+  for (const f of figures) figs.push(await makeFigure(f, st));
   const safe = String(a.name || '지리자료').replace(/[\/:*?"<>|]/g, '_').slice(0, 60);
   const dir = remote ? publish.newDir() : (a.outDir || OUT);
   const paths = exportFigures(figs, { outDir: dir, name: safe, formats: a.formats, answerKey: remote ? undefined : a.answerKey, style: st });
   const files = remote ? paths.map((p) => publish.url(p)) : paths;
   // 고치기용 설계도: 같은 폴더에 <이름>.geo-figure.json — 나중에 open_figure_spec 으로 읽어 일부만 바꿔 다시 만든다
   let specFile = null;
-  if (!remote) { specFile = path.join(dir, `${safe}.geo-figure.json`); fs.writeFileSync(specFile, JSON.stringify({ name: safe, formats: a.formats, style: a.style, answerKey: a.answerKey, figures: a.figures }, null, 1)); }
+  if (!remote) { specFile = path.join(dir, `${safe}.geo-figure.json`); fs.writeFileSync(specFile, JSON.stringify({ name: safe, formats: a.formats, style, answerKey: a.answerKey, figures }, null, 1)); }
   return { files, ...(updateNotice() ? { update: updateNotice() } : {}), ...(remote ? { expires: `내려받기 주소는 ${publish.keepText} 동안, 한 번만 열립니다(받으면 서버에서 바로 지움). 꼭 내려받아 저장하세요.`, ...(a.answerKey ? { answerKey: a.answerKey, answerKeyNote: '시험 보안을 위해 정답표는 파일에 넣지 않았습니다. 이 내용을 교사에게 그대로 보여 주세요.' } : {}) } : {}), sizes_mm: figs.map((f) => ({ title: f.title, w: round(f.w), h: round(f.h) })), ...(specFile ? { specFile } : {}), note: '그림마다 묶음 하나 — PPTX는 그룹 해제, HWPX는 개체 풀기를 한 번만 하면 시군구·기호·선·범례가 모두 따로 움직인다(도형 이름이 지역 이름). 범례 칸과 지역은 같은 무늬라 서식 복사로 단계를 바꿀 수 있다. 범례·지역·기호를 크게 바꾸려면 open_figure_spec 으로 설계도를 읽어 고친 뒤 make_figures 를 다시 부른다.' };
 }));
 
-server.tool('preview_figures', '시안(미리보기 그림)을 대화창에 바로 보여 준다 — 파일을 만들기 전에 쓴다. 기호 스타일이 정해지지 않았으면 compareLabelStyles:true 로 4가지(흰 테두리·바탕 없음·네모 바탕·원 바탕)를 나란히 보여 주고 교사가 고르게 한다. 고른 뒤 make_figures 로 파일을 만든다.', {
-  figures: z.array(z.object({ title: z.string().optional() }).passthrough()).describe('make_figures 와 같은 그림 명세'),
-  compareLabelStyles: z.boolean().optional().describe('true 면 첫 지도 그림을 기호 스타일 4가지로 그려 비교'),
-  style: z.object({ font: z.string().optional(), fontPptx: z.string().optional(), size: z.number().optional(), small: z.number().optional(), width: z.number().optional() }).optional(),
+server.tool('preview_figures', '파일을 만들기 전 PNG 시안을 보여 준다. 기호 비교가 필요하면 compareLabelStyles:true를 쓴다. 로컬 previewId는 make_figures에서 재사용할 수 있다.', {
+  figures: figureSpecs.describe('make_figures와 같은 그림 명세'),
+  compareLabelStyles: z.boolean().optional().describe('true면 첫 지도에 기호 스타일 4개를 비교'),
+  style: figureStyle.optional(),
 }, async (a) => {
   try {
     const st = { ...loadStyle(), ...(a.style || {}) };
     const content = [];
-    const NAMES = { halo: '① 흰 테두리(기본)', plain: '② 바탕 없음', box: '③ 네모 흰 바탕', circle: '④ 작은 원 흰 바탕' };
-    const withStyle = (f, k) => JSON.parse(JSON.stringify(f, (key, v) => (key === 'map' && v && typeof v === 'object' ? { ...v, labelStyle: k } : v)));
-    const base = a.figures.find((x) => x.map || x.parts?.some((p) => p.map)) || a.figures[0];
-    const list = a.compareLabelStyles
-      ? Object.keys(NAMES).map((k) => ({ cap: NAMES[k], spec: withStyle(base, k) }))
-      : a.figures.slice(0, 6).map((f, i) => ({ cap: `시안 ${i + 1}: ${f.title || ''}`, spec: f }));
+    const compareIndex = a.compareLabelStyles && a.figures.length ? Math.max(0, a.figures.findIndex(hasMap)) : -1;
+    const list = compareIndex >= 0
+      ? Object.entries(LABEL_NAMES).map(([label, cap]) => ({ cap, spec: withLabelStyle(a.figures[compareIndex], label) }))
+      : a.figures.slice(0, 6).map((f, i) => ({ cap: '시안 ' + (i + 1) + ': ' + (f.title || ''), spec: f }));
     for (const { cap, spec } of list) {
       const fig = await makeFigure(spec, st);
       content.push({ type: 'text', text: cap }, { type: 'image', mimeType: 'image/png', data: Buffer.from(renderPng(fig, { width: 800 })).toString('base64') });
     }
-    content.push({ type: 'text', text: a.compareLabelStyles ? '교사에게 ①~④ 중 하나를 고르게 하고, 그 값(halo·plain·box·circle)을 map.labelStyle 에 넣어 make_figures 를 부른다.' : '교사가 괜찮다고 하면 같은 명세로 make_figures(confirmed:true)를 부른다. 고칠 점이 있으면 고쳐서 다시 미리 본다.' });
+    let how = compareIndex >= 0 ? '기호 ①~④ 중 하나를 고르세요(halo·plain·box·circle).' : '교사 확인 후 파일을 만드세요.';
+    const allFiguresShown = compareIndex >= 0 ? a.figures.length === 1 : list.length === a.figures.length;
+    if (!remote && list.length && allFiguresShown && Buffer.byteLength(JSON.stringify(a)) <= MAX_PREVIEW_SPEC_BYTES) {
+      const id = randomBytes(8).toString('hex');
+      if (previews.size >= MAX_PREVIEWS) previews.delete(previews.keys().next().value);
+      previews.set(id, { figures: a.figures, style: a.style, st, compareIndex, expires: Date.now() + PREVIEW_TTL_MS });
+      how += '\npreviewId: ' + id + '\nmake_figures에 figures 대신 이 ID를 보내세요.';
+      if (compareIndex >= 0) how += ' 선택한 labelStyle도 보내세요.';
+    } else {
+      how += ' make_figures에 figures를 보내세요.';
+    }
+    content.push({ type: 'text', text: how });
     return { content };
   } catch (e) { return { isError: true, content: [{ type: 'text', text: `오류: ${e.message || e}` }] }; }
 });

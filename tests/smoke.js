@@ -3,6 +3,9 @@
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import { Client } from '@modelcontextprotocol/sdk/client/index.js';
+import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js';
+import { createServer } from '../src/tools.js';
 import { unzipSync, strFromU8 } from 'fflate';
 import { makeFigure, exportFigures } from '../src/build.js';
 import { renderPng } from '../src/svg.js';
@@ -60,6 +63,34 @@ ok(cl.rows.length === 2 && cl.rows.every((r) => r.values.temp.length === 12), '�
 ok(examSpots().find((s) => s.name === '칭다오').code === 'Cw', '칭다오 기호 Cw');
 const b = await findData({ source: 'bundle', bundle: { key: 'daytime-population', items: ['주간 인구 지수'] } });
 ok(b.rows.length > 200, `내장 KOSIS 자료(${b.rows.length}행)`);
+
+// 실제 MCP 호출에서 시안 ID는 확인 절차를 거쳐 같은 HWPX를 내보낸다.
+const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+const server = createServer();
+const client = new Client({ name: 'smoke', version: '1' });
+await server.connect(serverTransport);
+await client.connect(clientTransport);
+const call = (name, args) => client.callTool({ name, arguments: args });
+try {
+  const figures = [specs[1]];
+  const style = { size: 10 };
+  const args = { outDir: out, formats: ['hwpx'], confirmed: true };
+  const preview = await call('preview_figures', { figures, style });
+  const previewId = preview.content.at(-1).text.match(/previewId: ([a-f0-9]{16})/)?.[1];
+  ok(previewId && preview.content.filter((item) => item.type === 'image').length === 1, 'MCP: 시안 1장과 재사용 ID');
+  ok((await call('make_figures', { ...args, previewId, confirmed: false })).isError, 'MCP: 시안 ID도 교사 확인 필요');
+  ok((await call('make_figures', { ...args, previewId: 'missing' })).isError, 'MCP: 없는 시안 ID 거절');
+  const byId = await call('make_figures', { ...args, previewId, name: '시안ID' });
+  const bySpec = await call('make_figures', { ...args, figures, style, name: '전체명세' });
+  const section = (result) => {
+    const [file] = JSON.parse(result.content[0].text).files;
+    return strFromU8(unzipSync(fs.readFileSync(file))['Contents/section0.xml']);
+  };
+  ok(!byId.isError && !bySpec.isError && section(byId) === section(bySpec), 'MCP: 시안 ID와 전체 명세의 HWPX 내용 일치');
+} finally {
+  await client.close();
+  await server.close();
+}
 
 fs.rmSync(out, { recursive: true, force: true });
 console.log(fail ? `\n실패 ${fail}건` : '\n모두 통과');
