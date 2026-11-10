@@ -1,6 +1,6 @@
 {
   "name": "geo-figure-mcp",
-  "version": "0.2.5",
+  "version": "0.2.6",
   "description": "지리 시험용 지도·그래프를 도형 하나하나 고칠 수 있는 PPTX·HWPX로 만드는 MCP 서버",
   "author": "김한솔 (한백고등학교)",
   "mcpName": "io.github.skyblue3925-svg/geo-figure-mcp",

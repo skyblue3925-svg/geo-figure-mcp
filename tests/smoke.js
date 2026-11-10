@@ -10,6 +10,7 @@ import { unzipSync, strFromU8 } from 'fflate';
 import { makeFigure, exportFigures } from '../src/build.js';
 import { renderPng } from '../src/svg.js';
 import { LANDFORM_PRESETS } from '../src/terrain.js';
+import { listRegions } from '../src/maps.js';
 import { findData, examSpots } from '../src/data.js';
 
 let fail = 0;
@@ -61,8 +62,20 @@ ok(png.length > 2000 && png[1] === 0x50, `미리보기 PNG(${png.length} bytes)`
 const cl = await findData({ source: 'climate', regions: ['칭다오', '티베트고원'] });
 ok(cl.rows.length === 2 && cl.rows.every((r) => r.values.temp.length === 12), '기후 자료: 칭다오·티베트고원');
 ok(examSpots().find((s) => s.name === '칭다오').code === 'Cw', '칭다오 기호 Cw');
+const temperature = await findData({ source: 'climate', regions: ['칭다오', '티베트고원'], indicators: ['temp'] });
+ok(temperature.unit === '℃' && temperature.citeAll === cl.citeAll && temperature.rows.every((row, i) =>
+  Object.keys(row.values).length === 1 && JSON.stringify(row.values.temp) === JSON.stringify(cl.rows[i].values.temp)),
+'기후: 기온만 선택해도 월별 값과 출처 일치');
 const b = await findData({ source: 'bundle', bundle: { key: 'daytime-population', items: ['주간 인구 지수'] } });
 ok(b.rows.length > 200, `내장 KOSIS 자료(${b.rows.length}행)`);
+
+const query = { key: 'daytime-population', period: '2020', items: ['주간 인구 지수'] };
+const gyeonggi = await findData({ source: 'bundle', bundle: { ...query, within: ['경기'] } });
+const names = new Set(listRegions({ level: 'sigungu', within: ['경기'], edition: gyeonggi.mapEdition }));
+const expected = b.rows.filter((row) => names.has(row.mapName));
+ok(gyeonggi.rows.length === 31 && JSON.stringify(gyeonggi.rows) === JSON.stringify(expected), '내장 KOSIS: 경기도 31개 시·군의 값과 지도 이름 일치');
+const central = await findData({ source: 'bundle', bundle: { ...query, regions: ['서울 중구', '부산 중구'] } });
+ok(central.rows.length === 2 && central.rows.some((r) => r.mapName === '서울 중구') && central.rows.some((r) => r.mapName === '부산 중구'), '내장 KOSIS: 같은 이름의 지역을 시·도별로 선택');
 
 // 실제 MCP 호출에서 시안 ID는 확인 절차를 거쳐 같은 HWPX를 내보낸다.
 const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
@@ -72,6 +85,10 @@ await server.connect(serverTransport);
 await client.connect(clientTransport);
 const call = (name, args) => client.callTool({ name, arguments: args });
 try {
+  const climateSpots = JSON.parse((await call('list_exam_climate_spots', { code: 'Cs', summary: true })).content[0].text);
+  ok(climateSpots.length > 0 && climateSpots.every((spot) => spot.code.startsWith('Cs') && Object.keys(spot).length === 2), 'MCP: 기후 후보 지점 요약');
+  const regions = JSON.parse((await call('list_regions', { edition: '2025', query: '광주' })).content[0].text);
+  ok(JSON.stringify(regions) === JSON.stringify(['광주']), 'MCP: 과거 지도 판에서 광주 이름 검색');
   const figures = [specs[1]];
   const style = { size: 10 };
   const args = { outDir: out, formats: ['hwpx'], confirmed: true };
@@ -87,6 +104,19 @@ try {
     return strFromU8(unzipSync(fs.readFileSync(file))['Contents/section0.xml']);
   };
   ok(!byId.isError && !bySpec.isError && section(byId) === section(bySpec), 'MCP: 시안 ID와 전체 명세의 HWPX 내용 일치');
+  const savedPath = JSON.parse(bySpec.content[0].text).specFile;
+  const saved = JSON.parse(fs.readFileSync(savedPath, 'utf8'));
+  saved.answerKey = '정답표\n별도 보관';
+  fs.writeFileSync(savedPath, JSON.stringify(saved));
+  const original = fs.readFileSync(savedPath, 'utf8');
+  const edited = await call('preview_figures', { saved: { path: savedPath, labelStyle: 'circle', labels: { '경기 화성시': 'B' } } });
+  const editedId = edited.content.at(-1).text.match(/previewId: ([a-f0-9]{16})/)?.[1];
+  ok(editedId && !JSON.stringify(edited.content.filter((item) => item.type === 'text')).includes('별도 보관'), 'MCP: 저장한 설계도에서 기호만 수정하고 정답표는 반환하지 않음');
+  const output = await call('make_figures', { ...args, previewId: editedId, name: '부분수정' });
+  const newSpec = JSON.parse(fs.readFileSync(JSON.parse(output.content[0].text).specFile, 'utf8'));
+  ok(newSpec.figures[0].map.labelStyle === 'circle' && newSpec.figures[0].map.labels['경기 화성시'] === 'B' &&
+    !Object.hasOwn(newSpec, 'answerKey') && fs.readFileSync(savedPath, 'utf8') === original, 'MCP: 원본을 보존하고 부분 수정본에 정답표를 자동으로 넣지 않음');
+
 } finally {
   await client.close();
   await server.close();

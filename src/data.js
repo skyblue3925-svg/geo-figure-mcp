@@ -75,7 +75,15 @@ export async function findData({ source, indicators = [], regions = [], year, ye
   if (source === 'climate') {
     // 지점 이름(평가원 기출 지점 한글 이름) · 관측소 영문 이름 · "위도,경도" → 가장 가까운 WMO 관측소의 1991~2020 평년값
     if (!regions.length) throw new Error('지점을 주세요. 예: ["샌프란시스코","이르쿠츠크"] 또는 ["37.57,126.98"]. 기출 지점 목록은 list_exam_climate_spots');
-    return { title: 'WMO 기후평년값 1991~2020', unit: '℃, mm', cite: SOURCES.climate.cite, year: '1991~2020', rows: regions.map(climateRow), get citeAll() { return [...new Set(this.rows.map((r) => r.cite || SOURCES.climate.cite))].join('; '); } };
+    const units = { temp: '℃', precip: 'mm' };
+    const requested = Object.keys(units).filter((name) => !indicators.length || indicators.includes(name));
+    const unknown = indicators.find((name) => !Object.hasOwn(units, name));
+    if (unknown !== undefined) throw new Error('없는 기후 지표: ' + unknown + '. 선택 가능: temp, precip');
+    const rows = regions.map(climateRow);
+    if (requested.length < Object.keys(units).length) {
+      for (const row of rows) row.values = Object.fromEntries(requested.map((name) => [name, row.values[name]]));
+    }
+    return { title: 'WMO 기후평년값 1991~2020', unit: requested.map((name) => units[name]).join(', '), cite: SOURCES.climate.cite, year: '1991~2020', rows, get citeAll() { return [...new Set(this.rows.map((r) => r.cite || SOURCES.climate.cite))].join('; '); } };
   }
   if (source === 'seoul-daytime') {
     const d = load('seoul-daytime-2020.json');
@@ -271,7 +279,7 @@ export function bundleList() {
   try { return JSON.parse(fs.readFileSync(new URL('kosis/index.json', DATA), 'utf8')); } catch { return []; }
 }
 const DEFAULT_PICK = ['계', '합계', '총인구', '전체', '소계', '총계', '전국'];
-// q: { key, items:[항목 이름], period, where:{ C1:'총인구' }, regionDim:'C2' }
+// q: { key, items:[항목 이름], period, where:{ C1:'총인구' }, regionDim:'C2', within:['경기'], regions:['경기 화성시'] }
 export function bundleData(q) {
   let o;
   try { o = JSON.parse(fs.readFileSync(new URL(`kosis/${q.key}.json`, DATA), 'utf8')); } catch { throw new Error(`내장 통계에 없는 이름: ${q.key}. list_bundled_data 로 목록을 보세요.`); }
@@ -334,7 +342,23 @@ export function bundleData(q) {
       r.mapName = m;
     }
   } catch {}
-  return { title: o.title, unit: o.units, cite: o.cite, year: period, fixed, rows: res, mapEdition, note: `내장 KOSIS 자료(받은 날 ${o.retrieved}). 고정한 분류: ${JSON.stringify(fixed)}. 지도에는 mapName 과 map.edition='${mapEdition}' 을 쓴다(일반구는 null — 시 합계 행을 쓴다)` };
+  // 시·도 소속과 중복 지명이 확정된 뒤 출력할 지역만 고른다.
+  const regionNames = new Set(q.regions);
+  const provinces = new Set(q.within);
+  const matchedRegions = new Set();
+  const matchedProvinces = new Set();
+  const selected = res.filter(({ name, mapName }) => {
+    const province = mapName?.includes(' ') ? mapName.split(' ', 1)[0] : null;
+    if (provinces.size && !provinces.has(province)) return false;
+    matchedProvinces.add(province);
+    const matches = [mapName, name].filter((key) => regionNames.has(key));
+    matches.forEach((key) => matchedRegions.add(key));
+    return !regionNames.size || matches.length > 0;
+  });
+  const missing = [...provinces].filter((name) => !matchedProvinces.has(name))
+    .concat([...regionNames].filter((name) => !matchedRegions.has(name)));
+  if (missing.length) throw new Error('선택한 표·기간·분류에 없는 지역: ' + missing.join(', '));
+  return { title: o.title, unit: o.units, cite: o.cite, year: period, fixed, rows: selected, mapEdition, note: `내장 KOSIS 자료(받은 날 ${o.retrieved}). 고정한 분류: ${JSON.stringify(fixed)}. 지도에는 mapName 과 map.edition='${mapEdition}' 을 쓴다(일반구는 null — 시 합계 행을 쓴다)` };
 }
 
 // 지도 지역 이름(시·도 짧은 이름, '시도 시군구') — 내장 자료와 이름 맞추기용
