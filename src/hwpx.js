@@ -174,11 +174,7 @@ export function buildHwpx(figs, opts = {}) {
 
   const P = (inner, pp) => `<hp:p id="0" paraPrIDRef="${pp}" styleIDRef="0" pageBreak="0" columnBreak="0" merged="0">${inner}</hp:p>`;
   const cTitle = charPr(10, true), cBody = charPr(10, false);
-  const body = [];
-  // 쪽에 다 안 들어가는 그림은 제목부터 다음 쪽으로 넘긴다(넘치면 한글이 그림을 앞 그림 위에 겹쳐 놓는다)
-  const USABLE = PAGE_H - 2 * MT - u(5) - u(7) - u(6);
-  let used = 0;
-  figs.forEach((f, k) => {
+  const drawings = figs.map((f, k) => {
     // 개체가 묶음 밖으로 나가면 한글이 묶음을 줄여 버린다 → 실제 범위를 재고, 음수면 옮겨서 다시 만든다
     // 한글은 '하나짜리 묶음'을 풀지 못한다 → 그림 안이 묶음 하나뿐이면 한 겹 벗긴다
     let items = f.items;
@@ -192,9 +188,18 @@ export function buildHwpx(figs, opts = {}) {
     }
     const W = Math.max(u(f.w), ext[2]), H = Math.max(u(f.h), ext[3]);
     const cont = `<hp:container id="${next()}" zOrder="${k}" numberingType="PICTURE" textWrap="IN_FRONT_OF_TEXT" textFlow="BOTH_SIDES" lock="0" dropcapstyle="None" href="" groupLevel="0" instid="${next()}"><hp:offset x="0" y="0"/><hp:orgSz width="${W}" height="${H}"/><hp:curSz width="0" height="0"/><hp:flip horizontal="0" vertical="0"/><hp:rotationInfo angle="0" centerX="${Math.round(W / 2)}" centerY="${Math.round(H / 2)}" rotateimage="1"/><hp:renderingInfo><hc:transMatrix ${I}/><hc:scaMatrix ${I}/><hc:rotMatrix ${I}/></hp:renderingInfo>${objs.join('')}<hp:sz width="${W}" widthRelTo="ABSOLUTE" height="${H}" heightRelTo="ABSOLUTE" protect="0"/><hp:pos treatAsChar="0" affectLSpacing="0" flowWithText="1" allowOverlap="1" holdAnchorAndSO="0" vertRelTo="PARA" horzRelTo="COLUMN" vertAlign="TOP" horzAlign="LEFT" vertOffset="0" horzOffset="0"/><hp:outMargin left="0" right="0" top="0" bottom="${u(4)}"/><hp:shapeComment>${esc(f.title || '그림')}</hp:shapeComment></hp:container>`;
-    const first = k === 0 ? secPr() : '';
+    return { f, cont, W, H };
+  });
+
+  const landscape = drawings.some(({ W }) => W > PAGE_W - 2 * ML);
+  // 쪽에 다 안 들어가는 그림은 제목부터 다음 쪽으로 넘긴다(넘치면 한글이 그림을 앞 그림 위에 겹쳐 놓는다)
+  const usable = (landscape ? PAGE_W : PAGE_H) - 2 * MT - u(5) - u(7) - u(6);
+  const body = [];
+  let used = 0;
+  drawings.forEach(({ f, cont, H }, k) => {
+    const first = k === 0 ? secPr(landscape) : '';
     const need = u(8) + H + u(8);
-    const brk = k > 0 && used + need > USABLE;
+    const brk = k > 0 && used + need > usable;
     used = brk ? need : used + need;
     body.push(P(`<hp:run charPrIDRef="${cTitle}">${first}<hp:t>${esc(f.title || '')}</hp:t></hp:run>`, paraPr('LEFT', 130, u(2))).replace('pageBreak="0"', `pageBreak="${brk ? 1 : 0}"`));
     // 그림은 '글 앞으로' 띄우고, 그림 높이만큼 고정 높이 문단으로 자리를 비운다 → 묶음을 풀어도 조각이 밀리지 않는다
@@ -222,12 +227,12 @@ export function buildHwpx(figs, opts = {}) {
   return zipSync(files, { level: 6 });
 }
 
-function secPr() {
+function secPr(landscape) {
   return '<hp:secPr id="" textDirection="HORIZONTAL" spaceColumns="1134" tabStop="8000" tabStopVal="4000" tabStopUnit="HWPUNIT" outlineShapeIDRef="1" memoShapeIDRef="0" textVerticalWidthHead="0" masterPageCnt="0">'
     + '<hp:grid lineGrid="0" charGrid="0" wonggojiFormat="0"/><hp:startNum pageStartsOn="BOTH" page="0" pic="0" tbl="0" equation="0"/>'
     + '<hp:visibility hideFirstHeader="0" hideFirstFooter="0" hideFirstMasterPage="0" border="SHOW_ALL" fill="SHOW_ALL" hideFirstPageNum="0" hideFirstEmptyLine="0" showLineNumber="0"/>'
     + '<hp:lineNumberShape restartType="0" countBy="0" distance="0" startNumber="0"/>'
-    + `<hp:pagePr landscape="WIDELY" width="${PAGE_W}" height="${PAGE_H}" gutterType="LEFT_ONLY"><hp:margin header="${u(5)}" footer="${u(7)}" gutter="0" left="${ML}" right="${ML}" top="${MT}" bottom="${MT}"/></hp:pagePr>`
+    + `<hp:pagePr landscape="${landscape ? 'NARROWLY' : 'WIDELY'}" width="${PAGE_W}" height="${PAGE_H}" gutterType="LEFT_ONLY"><hp:margin header="${u(5)}" footer="${u(7)}" gutter="0" left="${ML}" right="${ML}" top="${MT}" bottom="${MT}"/></hp:pagePr>`
     + '<hp:footNotePr><hp:autoNumFormat type="DIGIT" userChar="" prefixChar="" suffixChar=")" supscript="0"/><hp:noteLine length="-1" type="SOLID" width="0.12 mm" color="#000000"/><hp:noteSpacing betweenNotes="283" belowLine="567" aboveLine="850"/><hp:numbering type="CONTINUOUS" newNum="1"/><hp:placement place="EACH_COLUMN" beneathText="0"/></hp:footNotePr>'
     + '<hp:endNotePr><hp:autoNumFormat type="DIGIT" userChar="" prefixChar="" suffixChar=")" supscript="0"/><hp:noteLine length="14692344" type="SOLID" width="0.12 mm" color="#000000"/><hp:noteSpacing betweenNotes="0" belowLine="567" aboveLine="850"/><hp:numbering type="CONTINUOUS" newNum="1"/><hp:placement place="END_OF_DOCUMENT" beneathText="0"/></hp:endNotePr>'
     + ['BOTH', 'EVEN', 'ODD'].map((t) => `<hp:pageBorderFill type="${t}" borderFillIDRef="1" textBorder="PAPER" headerInside="0" footerInside="0" fillArea="PAPER"><hp:offset left="1417" right="1417" top="1417" bottom="1417"/></hp:pageBorderFill>`).join('')

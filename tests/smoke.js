@@ -104,6 +104,17 @@ try {
     return strFromU8(unzipSync(fs.readFileSync(file))['Contents/section0.xml']);
   };
   ok(!byId.isError && !bySpec.isError && section(byId) === section(bySpec), 'MCP: 시안 ID와 전체 명세의 HWPX 내용 일치');
+  ok(section(bySpec).includes('<hp:pagePr landscape="WIDELY"'), 'MCP: a single map fits on portrait A4');
+  const wideFigure = {
+    title: 'Map and bar chart', layout: 'row',
+    parts: [{ map: { ...specs[1].map, width: 100, height: 78 } },
+      { chart: { ...specs[3].chart, width: 110, height: 78 } }],
+  };
+  const wide = await call('make_figures', { ...args, figures: [wideFigure, wideFigure], name: 'landscape' });
+  const wideSection = wide.isError ? '' : section(wide);
+  ok(wideSection.includes('<hp:pagePr landscape="NARROWLY" width="59528" height="84186"'),
+    'MCP: a side-by-side map and chart switch to landscape A4');
+  ok((wideSection.match(/pageBreak="1"/g) || []).length === 1, 'MCP: landscape uses its shorter page height for pagination');
   const savedPath = JSON.parse(bySpec.content[0].text).specFile;
   const saved = JSON.parse(fs.readFileSync(savedPath, 'utf8'));
   saved.answerKey = '정답표\n별도 보관';
