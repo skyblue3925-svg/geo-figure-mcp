@@ -5,7 +5,7 @@
 // - 만든 파일: <PUBLIC_URL>/files/<무작위>/<이름>  — 한 번 받으면 바로 지우고, 안 받아도 KEEP_MINUTES(기본 60분) 뒤 지운다
 // - ACCESS_TOKEN 필수: /mcp?token=… 또는 Authorization: Bearer … (비밀번호 없이 열려면 ALLOW_OPEN=1)
 // - 정답표는 파일에 넣지 않고 대화창에만 돌려준다. KOSIS 직접 조회는 원격에서 끈다(내장 자료만).
-// - 사용량: IP마다 1분 60번·그림 1시간 30번, 서버 전체 그림 하루 DAILY_MAX(기본 300)번
+// - 사용량: IP마다 1분 60번·그림 1시간 90번, 서버 전체 그림 하루 DAILY_MAX(기본 300)번
 import http from 'node:http';
 import fs from 'node:fs';
 import os from 'node:os';
@@ -20,6 +20,7 @@ const FILES = process.env.FILES_DIR || path.join(os.tmpdir(), 'geo-figure-files'
 const TOKEN = process.env.ACCESS_TOKEN || '';
 const KEEP_MIN = +(process.env.KEEP_MINUTES || 60);
 const KEEP_MS = KEEP_MIN * 60 * 1000;
+const MAKE_PER_HOUR = 90;
 const DAILY_MAX = +(process.env.DAILY_MAX || 300);
 if (!TOKEN && process.env.ALLOW_OPEN !== '1') { console.error('ACCESS_TOKEN 을 정하세요(비밀번호 없이 열려면 ALLOW_OPEN=1).'); process.exit(1); }
 const tokenOk = (got) => { const a = Buffer.from(String(got || '')), b = Buffer.from(TOKEN); return a.length === b.length && crypto.timingSafeEqual(a, b); };
@@ -41,7 +42,7 @@ setInterval(() => {
   }
 }, 5 * 60 * 1000).unref();
 
-// 사용량 제한: IP 마다 1분에 60번, 그림 만들기는 1시간에 30번
+// 사용량 제한: IP 마다 1분에 60번, 그림 만들기는 1시간에 90번
 const hits = new Map();
 function limited(ip, kind, max, windowMs) {
   const k = `${ip}|${kind}`, now = Date.now();
@@ -84,7 +85,7 @@ const server = http.createServer(async (req, res) => {
     let body;
     try { body = JSON.parse(raw); } catch { return send(res, 400, { error: 'JSON 이 아닙니다.' }); }
     const isMake = [].concat(body).some((m) => m?.method === 'tools/call' && m?.params?.name === 'make_figures');
-    if (isMake && limited(ip, 'make', 30, 3600 * 1000)) return send(res, 429, { error: '그림 만들기는 1시간에 30번까지입니다.' });
+    if (isMake && limited(ip, 'make', MAKE_PER_HOUR, 3600 * 1000)) return send(res, 429, { error: '같은 접속 IP에서는 최근 1시간에 ' + MAKE_PER_HOUR + '번까지 파일을 만들 수 있습니다.' });
     if (isMake && dailyOver()) return send(res, 429, { error: '오늘 서버 전체 사용량을 다 썼습니다. 내일 다시 쓰거나 내 컴퓨터에 설치해 쓰세요.' });
     try {
       const mcp = createServer({ remote: true, publish });
