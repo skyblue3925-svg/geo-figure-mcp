@@ -82,7 +82,7 @@ server.tool('list_sources', '쓸 수 있는 통계 자료원과 지표 예시를
 
 server.tool('find_data', '실제 통계를 찾는다. 결과에 출처(cite)와 연도가 붙는다. 숫자를 지어내지 말고 이 결과만 쓴다.', {
   source: z.enum(remote ? Object.keys(SOURCES).filter((k) => k !== 'kosis') : Object.keys(SOURCES)).describe(remote ? '자료원 (원격 서버에서는 KOSIS 직접 조회를 쓰지 않는다 — 내장 자료 bundle 을 쓴다)' : '자료원'),
-  indicators: z.array(z.string()).default([]).describe('지표 코드 또는 열 이름'),
+  indicators: z.array(z.string()).default([]).describe('지표 코드 또는 열 이름. 서울 주간 인구는 예: ["주간인구지수"]. 비우면 서울 지표 전체'),
   regions: z.array(z.string()).default([]).describe('나라 ISO3(KOR, JPN…, 세계=WLD) / 기후: 기출 지점 한글 이름·관측소 영문 이름·"위도,경도" / 서울 자치구 이름'),
   kosis: z.object({ orgId: z.string().optional(), tblId: z.string().optional(), itmId: z.string().optional(), objL1: z.string().optional(), objL2: z.string().optional(), year: z.number().optional() }).passthrough().optional().describe('source 가 kosis 일 때: { orgId, tblId, itmId, objL1:"ALL", objL2, year }'),
   bundle: z.object({ key: z.string(), items: z.array(z.string()).optional(), period: z.coerce.string().optional(), where: z.object({}).passthrough().optional() }).passthrough().optional().describe('source 가 bundle 일 때: { key, items:[항목], period, where:{ C1:"총인구" } }'),

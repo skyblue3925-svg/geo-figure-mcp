@@ -4,12 +4,12 @@
   "title": "Geo Figure (지리 시험 지도·그래프)",
   "description": "지리 시험용 지도·그래프를 실제 통계로, 도형 하나하나 고칠 수 있는 PPTX·HWPX로 만든다.",
   "repository": { "url": "https://github.com/skyblue3925-svg/geo-figure-mcp", "source": "github" },
-  "version": "0.2.4",
+  "version": "0.2.5",
   "packages": [
     {
       "registryType": "npm",
       "identifier": "geo-figure-mcp",
-      "version": "0.2.4",
+      "version": "0.2.5",
       "transport": { "type": "stdio" },
       "environmentVariables": [
         { "name": "GEO_FIGURE_OUT", "description": "만든 파일을 저장할 폴더 (기본: 문서/지리시험자료)", "isRequired": false, "isSecret": false }

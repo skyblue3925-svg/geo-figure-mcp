@@ -79,11 +79,16 @@ export async function findData({ source, indicators = [], regions = [], year, ye
   }
   if (source === 'seoul-daytime') {
     const d = load('seoul-daytime-2020.json');
+    const requested = new Set(indicators);
+    const unknown = indicators.find((name) => !d.columns.includes(name));
+    if (unknown !== undefined) throw new Error(`없는 서울 주간 인구 지표: ${unknown}. 선택 가능: ${d.columns.join(', ')}`);
+    const columns = d.columns.map((name, i) => [name, i])
+      .filter(([name]) => !requested.size || requested.has(name));
     const pick = regions.length ? regions : Object.keys(d.rows).filter((k) => k !== '서울특별시');
     return { title: '서울 자치구 상주·주간 인구', unit: '명, 지수', cite: SOURCES['seoul-daytime'].cite, year: '2020', rows: pick.map((n) => {
       const v = d.rows[n];
       if (!v) throw new Error(`없는 자치구: ${n}`);
-      return { id: n, name: n, values: Object.fromEntries(d.columns.map((c, i) => [c, v[i]])) };
+      return { id: n, name: n, values: Object.fromEntries(columns.map(([name, i]) => [name, v[i]])) };
     }) };
   }
   if (source === 'kosis') return kosisData(arguments[0].kosis || {});
