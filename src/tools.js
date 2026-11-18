@@ -2,7 +2,8 @@
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { randomBytes } from 'node:crypto';
+import { createReferences } from './references.js';
+import { makeLinkedFigure, relabelFigure, figureAnswerKey } from './linked.js';
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
 import { SOURCES, findData, transform, round, assignLabels, suggestRegions, examSpots, kosisSearch, kosisItems, setKosisKey, bundleList, withKosisKey } from './data.js';
@@ -29,8 +30,8 @@ const GUIDE = `
 2. find_data 로 실제 통계를 찾는다. 한국 시·도·시·군·구 통계는 먼저 list_bundled_data에 query와 summary:true를 보내 후보를 찾고, 없을 때만 KOSIS(키 필요)를 쓴다. 숫자를 지어내지 않는다. 못 찾으면 [확인 필요]로 알리고 교사에게 숫자를 받는다.
 3. 만들기 전에 반드시 '계획 요약'을 보여 주고 교사의 "예"를 받는다:
    지표·단위 / 기준 연도 / 지역과 기호(A~E 또는 (가)~(마)) / 가공(지수·비율·편차·반올림) / 기호 순서(무작위·북→남·서→동·지정) / 출력(PPTX·HWPX) / 출처 문구
-4. 계획 요약과 함께 preview_figures 로 시안 그림을 보여 준다. 그림마다 기본 시안을 보여 주고, 기호를 비교할 때만 compareLabelStyles:true를 쓴다. 교사가 ‘예’라고 하면 make_figures로 만든다. 로컬에서 명세가 같으면 figures 대신 previewId를 쓴다. 파일 위치와 정답표를 알려 준다.
-5. 저장한 지도의 범례·기호는 preview_figures(saved)로 바꾼다. 그 밖의 수정은 open_figure_spec으로 설계도를 읽는다. 통계를 다시 찾지 않는다. 손으로 고칠 땐 그룹 해제(개체 풀기) 한 번이면 모든 도형이 따로 움직인다고 알려 준다.
+4. 계획 요약과 함께 preview_figures 로 시안 그림을 보여 준다. 그림마다 기본 시안을 보여 주고, 기호를 비교할 때만 compareLabelStyles:true를 쓴다. 교사가 ‘예’라고 하면 make_figures로 만든다. 명세가 같으면 figures 대신 previewId를 쓴다. 파일 위치와 정답표를 알려 준다.
+5. 시안의 범례·기호는 preview_figures(edit:{previewId, labels, legend})로 바꾼다. 로컬 파일은 saved로 열고, 전체 설계도는 open_figure_spec으로 읽는다. 통계를 다시 찾지 않는다. 손으로 고칠 땐 그룹 해제(개체 풀기) 한 번이면 모든 도형이 따로 움직인다고 알려 준다.
 
 [품질 규칙 — 교사 기준 + 경기도교육청 지리 문항 제작 자료]
 - 흑백 인쇄로 구분돼야 한다: 색 대신 빗금·회색 농도(자동).
@@ -46,12 +47,12 @@ const GUIDE = `
 const INSTRUCTIONS = [
   '지리 시험 자료는 실제 통계와 출처를 쓴다. 한국 자료는 list_bundled_data에 query와 summary:true를 보내 먼저 찾는다.',
   '지표·연도·지역·가공·기호·출력·출처와 시안을 제시하고 교사 확인 후 make_figures를 부른다.',
-  '기호를 비교할 때만 4종 시안을 요청한다. 로컬에서 명세가 같으면 previewId를 재사용한다.',
+  '기호를 비교할 때만 4종 시안을 요청한다. 명세가 같으면 previewId를 재사용한다.',
   '행정구역 판은 자료 연도에 맞춘다. 정답표는 로컬 파일 마지막 장 또는 원격 응답에 둔다.',
+  '내장 한국 통계 지도+막대는 find_data(asReference:true) → preview_figures(linked) → make_figures(previewId). 시안 기호는 preview_figures(edit)로 바꾼다.',
   '필요할 때 guide의 topic으로 workflow 또는 spec을 선택한다.',
 ].join('\n');
-const PREVIEW_TTL_MS = 30 * 60 * 1000;
-const MAX_PREVIEWS = 8;
+const MAX_DATA_BYTES = 256 * 1024;
 const MAX_PREVIEW_SPEC_BYTES = 64 * 1024;
 const MAX_SAVED_SPEC_BYTES = 512 * 1024;
 const figureSpecs = z.array(z.object({ title: z.string().optional() }).passthrough());
@@ -70,20 +71,36 @@ const savedEdit = z.strictObject({
   part: z.number().int().positive().optional().describe('자료 번호(1부터), 그림에 지도가 여러 개면 필수'),
   legend: z.array(z.string()).max(6).optional().describe('범례 문구를 단계 순서대로 지정. []로 삭제'),
   labelStyle: z.enum(['halo', 'plain', 'box', 'circle']).optional(),
-  labels: z.record(z.string(), z.string().min(1)).optional().describe('기존 지도 지역명에서 새 기호로 바꿀 항목만 지정'),
+  labels: z.record(z.string(), z.string().min(1)).optional().describe('지도 지역명과 새 기호. 연결된 그림에는 기호 추가 가능'),
+});
+
+const editFields = savedEdit.omit({ name: true, path: true });
+const linkedFigure = z.strictObject({
+  dataId: z.string(),
+  indicator: z.string(),
+  within: z.array(z.string()).min(1).optional().describe('시·군·구 지도 범위. 생략하면 전국 시·도(서울 전용 자료는 서울 자치구)'),
+  breaks: z.array(z.number()).min(1).max(5).describe('단계 하한값 목록(오름차순). 예: [100]'),
+  top: z.number().int().positive().optional().describe('막대만 상위 N곳으로 제한'),
+  labels: z.record(z.string(), z.string().min(1)).optional().describe('mapName별 기호'),
+  title: z.string().optional(),
 });
 
 function editSavedMap(edit) {
-  const { name, path: file, figure, part, legend, labelStyle, labels } = edit;
+  const { name, path: file } = edit;
   if ((name === undefined) === (file === undefined)) throw new Error('name 또는 path 하나를 지정하세요.');
   if (name && (path.basename(name) !== name || /[\\/:]/.test(name) || name === '.' || name === '..')) throw new Error('name은 확장자 없는 파일 이름만 지정하세요.');
   const source = file || path.join(OUT, name + '.geo-figure.json');
   if (!source.endsWith('.geo-figure.json')) throw new Error('.geo-figure.json 설계도 파일을 지정하세요.');
   if (fs.statSync(source).size > MAX_SAVED_SPEC_BYTES) throw new Error('저장된 설계도가 너무 큽니다. open_figure_spec으로 수정하세요.');
-  if (legend === undefined && labelStyle === undefined && !Object.keys(labels || {}).length) throw new Error('범례 또는 기호 변경을 지정하세요.');
   const saved = JSON.parse(fs.readFileSync(source, 'utf8'));
   const figures = figureSpecs.min(1).parse(saved.figures);
   const style = figureStyle.optional().parse(saved.style);
+  return { ...editMap(figures, edit), style };
+}
+
+function editMap(sourceFigures, { figure, part, legend, labelStyle, labels }) {
+  if (legend === undefined && labelStyle === undefined && !Object.keys(labels || {}).length) throw new Error('범례 또는 기호 변경을 지정하세요.');
+  const figures = [...sourceFigures];
   if (!figure && figures.length !== 1) throw new Error('수정할 그림 번호(figure)를 지정하세요.');
   const index = (figure || 1) - 1;
   const target = figures[index];
@@ -94,20 +111,18 @@ function editSavedMap(edit) {
   const partIndex = part ? part - 1 : mapIndexes[0];
   if (!mapIndexes.includes(partIndex)) throw new Error('해당 자료에 수정 가능한 지도가 없습니다.');
   const map = parts[partIndex].map;
-  const unknown = Object.keys(labels || {}).find((key) => !Object.hasOwn(map.labels || {}, key));
-  if (unknown !== undefined) throw new Error('지도에 기존 기호가 없는 지역: ' + unknown);
   const changed = { ...parts[partIndex], map: { ...map,
     ...(legend !== undefined ? { legend } : {}),
     ...(labelStyle !== undefined ? { labelStyle } : {}),
-    ...(labels ? { labels: { ...map.labels, ...labels } } : {}),
   } };
   figures[index] = target.parts ? { ...target, parts: parts.map((item, i) => i === partIndex ? changed : item) } : changed;
-  return { figures, style, index };
+  if (labels && Object.keys(labels).length) figures[index] = relabelFigure(figures[index], { partIndex, labels });
+  return { figures, index };
 }
 
-export function createServer({ remote = false, publish = null } = {}) {
+export function createServer({ remote = false, publish = null, references = createReferences(remote) } = {}) {
 const server = new McpServer({ name: 'geo-figure-mcp', version: PKG_VERSION }, { instructions: INSTRUCTIONS });
-const previews = new Map();
+const { previews, datasets } = references;
 const ok = (obj) => ({ content: [{ type: 'text', text: typeof obj === 'string' ? obj : JSON.stringify(obj) }] });
 const fail = (e) => ({ isError: true, content: [{ type: 'text', text: '오류: ' + (e.message || e) }] });
 const wrap = (fn) => async (a) => { try { return ok(await fn(a)); } catch (e) { return fail(e); } };
@@ -127,7 +142,7 @@ server.tool('list_sources', '쓸 수 있는 통계 자료원과 지표 예시를
 server.tool('find_data', '실제 통계를 찾는다. 결과에 출처(cite)와 연도가 붙는다. 숫자를 지어내지 말고 이 결과만 쓴다.', {
   source: z.enum(remote ? Object.keys(SOURCES).filter((k) => k !== 'kosis') : Object.keys(SOURCES)).describe(remote ? '자료원 (원격 서버에서는 KOSIS 직접 조회를 쓰지 않는다 — 내장 자료 bundle 을 쓴다)' : '자료원'),
   indicators: z.array(z.string()).default([]).describe('지표 코드 또는 열 이름. 서울: 주간인구지수 등. 기후: temp(기온), precip(강수량). 서울·기후는 비우면 전체'),
-  regions: z.array(z.string()).default([]).describe('나라 ISO3(KOR, JPN…, 세계=WLD) / 기후: 기출 지점 한글 이름·관측소 영문 이름·"위도,경도" / 서울 자치구 이름'),
+  regions: z.array(z.string()).default([]).describe('나라 ISO3(KOR, JPN…, 세계=WLD) / 기후: 국내 도시·기출 지점 한글 이름·관측소 영문 이름·"위도,경도" / 서울 자치구 이름'),
   kosis: z.object({ orgId: z.string().optional(), tblId: z.string().optional(), itmId: z.string().optional(), objL1: z.string().optional(), objL2: z.string().optional(), year: z.number().optional() }).passthrough().optional().describe('source 가 kosis 일 때: { orgId, tblId, itmId, objL1:"ALL", objL2, year }'),
   bundle: z.object({
     key: z.string(),
@@ -139,7 +154,17 @@ server.tool('find_data', '실제 통계를 찾는다. 결과에 출처(cite)와 
   }).passthrough().optional().describe('source가 bundle일 때 사용. 지도와 그래프에 필요한 항목과 지역만 요청한다.'),
   year: z.number().optional().describe('특정 연도. 비우면 가장 최근'),
   years: z.boolean().optional().describe('true 면 연도별 전체(시계열)'),
-}, wrap((a) => { if (remote && a.source === 'kosis') throw new Error('원격 서버에서는 KOSIS 직접 조회를 하지 않습니다(인증키를 대화창에 넣지 않도록). list_bundled_data 의 내장 자료를 쓰거나, 내 컴퓨터에 설치해 쓰세요.'); return findData(a); }));
+  asReference: z.boolean().optional().describe('내장 시·도·시군구 또는 서울 통계로 지도+막대를 만들 때 true. 행 대신 dataId를 반환'),
+}, wrap(async (a) => {
+  if (remote && a.source === 'kosis') throw new Error('원격 서버에서는 내장 자료 bundle을 쓰세요. KOSIS 직접 조회는 로컬에서 가능합니다.');
+  if (a.asReference && !['bundle', 'seoul-daytime'].includes(a.source)) throw new Error('dataId는 bundle 또는 seoul-daytime 통계에서 지원합니다.');
+  const data = await findData(a);
+  if (!a.asReference) return data;
+  if (!data.rows.length) throw new Error('선택한 조건에 통계 행이 없습니다.');
+  if (Buffer.byteLength(JSON.stringify(data)) > MAX_DATA_BYTES) throw new Error('참조할 통계가 너무 큽니다. 지표·지역을 좁혀 주세요.');
+  const { title, year, unit, cite, mapEdition } = data;
+  return { dataId: datasets.put(data), rowCount: data.rows.length, title, year, unit, cite, mapEdition, indicators: Object.keys(data.rows[0].values) };
+}));
 
 server.tool('list_exam_climate_spots', '평가원 기후 기출 지점. 후보 이름과 기후 기호만 필요하면 summary:true를 쓴다.', {
   code: z.string().optional().describe("기후 기호로 거르기. 예: 'Cs', 'BW', 'Df'"),
@@ -211,11 +236,9 @@ server.tool('assign_labels', '지역 이름을 A~E 또는 (가)~(마) 기호로 
 }, wrap((a) => assignLabels(a.names, a)));
 
 server.tool('make_figures', '그림 명세로 PPTX·HWPX 파일을 만든다. 만들기 전에 교사에게 계획 요약을 보여 주고 확인을 받았는지 먼저 확인한다. 명세 작성법은 guide.', {
-  figures: (remote ? figureSpecs : figureSpecs.optional()).describe('그림 명세 목록. guide의 spec 참고'),
-  ...(remote ? {} : {
-    previewId: z.string().optional().describe('명세가 같으면 figures 대신 로컬 시안 ID'),
-    labelStyle: z.enum(['halo', 'plain', 'box', 'circle']).optional().describe('기호 비교 시안에서 교사가 선택한 스타일'),
-  }),
+  figures: figureSpecs.optional().describe('그림 명세 목록. guide의 spec 참고'),
+  previewId: z.string().optional().describe('확인한 시안 ID. figures 대신 사용'),
+  labelStyle: z.enum(['halo', 'plain', 'box', 'circle']).optional().describe('기호 비교 시안에서 교사가 선택한 스타일'),
   name: z.string().default('지리자료').describe('파일 이름(확장자 제외)'),
   formats: z.array(z.enum(['pptx', 'hwpx'])).default(['pptx', 'hwpx']),
   answerKey: z.string().optional().describe(remote ? '정답표 — 원격 서버에서는 파일에 넣지 않고 대화창에만 돌려준다(시험 보안)' : '정답표 — 파일 마지막 장에 들어간다. 첫 줄은 제목'),
@@ -229,8 +252,7 @@ server.tool('make_figures', '그림 명세로 PPTX·HWPX 파일을 만든다. �
   if (a.previewId !== undefined) {
     if (figures !== undefined || style !== undefined) throw new Error('previewId는 figures 또는 style과 함께 쓸 수 없습니다. 명세를 바꾸려면 새 시안을 만드세요.');
     const preview = previews.get(a.previewId);
-    if (!preview || preview.expires <= Date.now()) {
-      previews.delete(a.previewId);
+    if (!preview) {
       throw new Error('시안 ID가 만료되었거나 없습니다. 다시 시안을 만들거나 원래 figures를 보내세요.');
     }
     if (a.labelStyle && preview.compareIndex < 0) throw new Error('labelStyle은 기호 비교 시안 ID와 함께 쓸 수 있습니다.');
@@ -238,7 +260,7 @@ server.tool('make_figures', '그림 명세로 PPTX·HWPX 파일을 만든다. �
     ({ figures, style, st } = preview);
     if (a.labelStyle) figures = figures.map((f, i) => i === preview.compareIndex ? withLabelStyle(f, a.labelStyle) : f);
   } else if (!figures || a.labelStyle !== undefined) {
-    throw new Error('figures 또는 로컬 previewId를 보내세요. labelStyle은 지도 명세 안에 지정할 수 있습니다.');
+    throw new Error('figures 또는 previewId를 보내세요. labelStyle은 지도 명세 안에 지정할 수 있습니다.');
   }
   if (remote && figures.length > 12) throw new Error('한 번에 그림은 12장까지 만들 수 있습니다.');
   st ??= { ...loadStyle(), ...style };
@@ -246,29 +268,48 @@ server.tool('make_figures', '그림 명세로 PPTX·HWPX 파일을 만든다. �
   for (const f of figures) figs.push(await makeFigure(f, st));
   const safe = String(a.name || '지리자료').replace(/[\/:*?"<>|]/g, '_').slice(0, 60);
   const dir = remote ? publish.newDir() : (a.outDir || OUT);
-  const paths = exportFigures(figs, { outDir: dir, name: safe, formats: a.formats, answerKey: remote ? undefined : a.answerKey, style: st });
+  const answerKey = [a.answerKey, figureAnswerKey(figures)].filter(Boolean).join('\n') || undefined;
+  const paths = exportFigures(figs, { outDir: dir, name: safe, formats: a.formats, answerKey: remote ? undefined : answerKey, style: st });
   const files = remote ? paths.map((p) => publish.url(p)) : paths;
   // 고치기용 설계도: 같은 폴더에 <이름>.geo-figure.json — 나중에 open_figure_spec 으로 읽어 일부만 바꿔 다시 만든다
   let specFile = null;
   if (!remote) { specFile = path.join(dir, `${safe}.geo-figure.json`); fs.writeFileSync(specFile, JSON.stringify({ name: safe, formats: a.formats, style, answerKey: a.answerKey, figures }, null, 1)); }
-  return { files, ...(updateNotice() ? { update: updateNotice() } : {}), ...(remote ? { expires: `내려받기 주소는 ${publish.keepText} 동안, 한 번만 열립니다(받으면 서버에서 바로 지움). 꼭 내려받아 저장하세요.`, ...(a.answerKey ? { answerKey: a.answerKey, answerKeyNote: '시험 보안을 위해 정답표는 파일에 넣지 않았습니다. 이 내용을 교사에게 그대로 보여 주세요.' } : {}) } : {}), sizes_mm: figs.map((f) => ({ title: f.title, w: round(f.w), h: round(f.h) })), ...(specFile ? { specFile } : {}), note: '그림마다 묶음 하나 — PPTX는 그룹 해제, HWPX는 개체 풀기를 한 번만 하면 시군구·기호·선·범례가 모두 따로 움직인다(도형 이름이 지역 이름). 범례 칸과 지역은 같은 무늬라 서식 복사로 단계를 바꿀 수 있다. 범례·지역·기호를 크게 바꾸려면 open_figure_spec 으로 설계도를 읽어 고친 뒤 make_figures 를 다시 부른다.' };
+  return { files, ...(updateNotice() ? { update: updateNotice() } : {}), ...(remote ? { expires: `내려받기 주소는 ${publish.keepText} 동안, 한 번만 열립니다(받으면 서버에서 바로 지움). 꼭 내려받아 저장하세요.`, ...(answerKey ? { answerKey, answerKeyNote: '시험 보안을 위해 정답표는 파일에 넣지 않았습니다. 이 내용을 교사에게 그대로 보여 주세요.' } : {}) } : {}), sizes_mm: figs.map((f) => ({ title: f.title, w: round(f.w), h: round(f.h) })), ...(specFile ? { specFile } : {}), note: '그림마다 묶음 하나 — PPTX는 그룹 해제, HWPX는 개체 풀기를 한 번만 하면 시군구·기호·선·범례가 모두 따로 움직인다(도형 이름이 지역 이름). 범례 칸과 지역은 같은 무늬라 서식 복사로 단계를 바꿀 수 있다. 시안의 범례·기호는 preview_figures의 edit로 바꿀 수 있다.' };
 }));
 
-server.tool('preview_figures', '파일을 만들기 전 PNG 시안을 보여 준다. 기호 비교가 필요하면 compareLabelStyles:true를 쓴다. 로컬 previewId는 make_figures에서 재사용할 수 있다.', {
-  figures: (remote ? figureSpecs : figureSpecs.optional()).describe('make_figures와 같은 그림 명세'),
+server.tool('preview_figures', '파일을 만들기 전 PNG 시안을 보여 준다. 기호 비교가 필요하면 compareLabelStyles:true를 쓴다. previewId는 make_figures에서 재사용할 수 있다.', {
+  figures: figureSpecs.optional().describe('make_figures와 같은 그림 명세'),
+  linked: linkedFigure.optional().describe('find_data의 dataId로 같은 통계의 지도와 막대를 함께 생성'),
+  edit: editFields.extend({ previewId: z.string() }).optional().describe('기존 시안의 범례·기호를 수정한다'),
   ...(remote ? {} : { saved: savedEdit.optional().describe('로컬 설계도에서 범례·기호만 수정. figures 대신 사용') }),
   compareLabelStyles: z.boolean().optional().describe('true면 첫 지도에 기호 스타일 4개를 비교'),
   style: figureStyle.optional(),
 }, async (a) => {
   try {
     let { figures, style } = a;
-    let savedIndex;
+    let savedIndex, inheritedStyle;
+    const inputs = [figures, a.saved, a.linked, a.edit].filter(v => v !== undefined);
+    if (inputs.length !== 1) throw new Error('figures, linked, edit 또는 로컬 saved 중 하나만 지정하세요.');
+    if (a.linked) {
+      const data = datasets.get(a.linked.dataId);
+      if (!data) throw new Error('통계 ID가 만료되었거나 없습니다. find_data를 다시 호출하세요.');
+      figures = [makeLinkedFigure(data, a.linked)];
+    }
+    if (a.edit) {
+      if (style || a.compareLabelStyles) throw new Error('edit는 style 또는 기호 비교와 함께 쓸 수 없습니다.');
+      const previous = previews.get(a.edit.previewId);
+      if (!previous) throw new Error('시안 ID가 만료되었거나 없습니다. 시안을 다시 만드세요.');
+      if (previous.compareIndex >= 0) throw new Error('기호 비교 시안은 편집 전에 일반 시안으로 만드세요.');
+      ({ figures, index: savedIndex } = editMap(previous.figures, a.edit));
+      style = previous.style;
+      inheritedStyle = previous.st;
+    }
     if (a.saved) {
       if (figures || style || a.compareLabelStyles) throw new Error('saved는 figures, style, 기호 비교와 함께 쓸 수 없습니다.');
       ({ figures, style, index: savedIndex } = editSavedMap(a.saved));
     }
     if (!figures) throw new Error('figures 또는 saved를 지정하세요.');
-    const st = { ...loadStyle(), ...style };
+    const st = inheritedStyle || { ...loadStyle(), ...style };
     const content = [];
     const compareIndex = a.compareLabelStyles && figures.length ? Math.max(0, figures.findIndex(hasMap)) : -1;
     const caption = (f, i) => ({ cap: '시안 ' + (i + 1) + ': ' + (f.title || ''), spec: f });
@@ -284,14 +325,13 @@ server.tool('preview_figures', '파일을 만들기 전 PNG 시안을 보여 준
     const maxBytes = a.saved ? MAX_SAVED_SPEC_BYTES : MAX_PREVIEW_SPEC_BYTES;
     const canReuse = Buffer.byteLength(JSON.stringify({ figures, style })) <= maxBytes;
     if (a.saved && !canReuse) throw new Error('수정된 설계도가 너무 큽니다. open_figure_spec으로 수정하세요.');
-    if (!remote && list.length && (a.saved || allFiguresShown) && canReuse) {
-      const id = randomBytes(8).toString('hex');
-      if (previews.size >= MAX_PREVIEWS) previews.delete(previews.keys().next().value);
-      previews.set(id, { figures, style, st, compareIndex, expires: Date.now() + PREVIEW_TTL_MS });
+    if ((a.linked || a.edit) && !canReuse) throw new Error('시안이 너무 큽니다. 지역 수를 줄여 다시 만드세요.');
+    if (list.length && (savedIndex !== undefined || allFiguresShown) && canReuse) {
+      const id = previews.put({ figures, style, st, compareIndex });
       how += '\npreviewId: ' + id + '\nmake_figures에 figures 대신 이 ID를 보내세요.';
       if (compareIndex >= 0) how += ' 선택한 labelStyle도 보내세요.';
       if (a.saved) how += ' 저장할 때 새 파일 이름과 출력 형식을 지정하세요.';
-      if (a.saved?.labels) how += ' 지도 기호만 바뀝니다. 그래프 기호와 정답표를 확인하세요.';
+      if (a.saved?.labels || a.edit?.labels) how += ' 연결된 그래프 기호와 지역 대응표도 함께 갱신됩니다. 직접 작성한 해설은 확인하세요.';
     } else {
       how += ' make_figures에 figures를 보내세요.';
     }

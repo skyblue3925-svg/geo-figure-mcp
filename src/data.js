@@ -9,7 +9,7 @@ export const SOURCES = {
   worldbank: { name: '세계은행 WDI', cite: 'World Bank', license: 'CC BY 4.0', key: false, note: '지표 코드 예: SP.POP.TOTL(총인구), SP.URB.TOTL.IN.ZS(도시화율), SP.DYN.TFRT.IN(합계 출산율), SP.POP.65UP.TO.ZS(65세 이상 비율), NY.GDP.PCAP.CD(1인당 GDP)' },
   'owid-energy': { name: 'Our World in Data 에너지', cite: 'Our World in Data(Energy Institute 등)', license: 'CC BY 4.0', key: false, note: '열 예: coal_share_elec, nuclear_share_elec, gas_share_elec, solar_share_elec, energy_per_capita' },
   'owid-co2': { name: 'Our World in Data CO2', cite: 'Our World in Data(Global Carbon Project)', license: 'CC BY 4.0', key: false, note: '열 예: co2, co2_per_capita, cumulative_co2' },
-  climate: { name: 'WMO 기후평년값 1991~2020 (내장, 관측소 4,655곳)', cite: 'WMO 기후평년값(1991~2020)', license: '이용 제한 없음(출처 표시, NCEI doi:10.25921/800j-vn07)', key: false, note: '지점: 평가원 기출 기후 지점 한글 이름(67곳, list_exam_climate_spots) · 관측소 영문 이름 · "위도,경도". 가장 가까운 관측소 값을 쓰고 거리를 알려 준다.' },
+  climate: { name: 'WMO 기후평년값 1991~2020 (내장, 관측소 4,697곳)', cite: 'WMO 기후평년값(1991~2020)', license: '이용 제한 없음(출처 표시, NCEI doi:10.25921/800j-vn07)', key: false, note: '지점: 국내 관측소 한글 이름(예: 서울, 강릉, 대구, 제주) · 평가원 기출 기후 지점 이름(list_exam_climate_spots) · 관측소 영문 이름 · "위도,경도". 좌표로 조회하면 가장 가까운 관측소와 거리를 알려 준다.' },
   'seoul-daytime': { name: '서울 자치구 주간 인구 2020 (내장)', cite: '통계청, 「2020 인구주택총조사」', license: '공공누리 제1유형', key: false, note: '열: 상주인구, 유입인구, 유출인구, 주간인구, 주간인구지수' },
   bundle: { name: '내장 KOSIS 통계 묶음(인증키 불필요)', cite: '국가데이터처 등(KOSIS)', license: '공공누리 제1유형', key: false, note: 'list_bundled_data 로 목록을 보고 find_data(source:"bundle", bundle:{ key, items, period, where }) 로 꺼낸다. 인구 구조·피라미드·주간 인구·외국인 주민·출산율·인구 이동·도시화·GRDP·제조업·사업체·에너지·신재생·농가·작물 재배 면적.' },
   kosis: { name: 'KOSIS 국가통계포털 (시·도·시·군·구 통계)', cite: '통계청 KOSIS', license: '공공누리 제1유형', key: true, note: 'kosis_search 로 통계표(orgId·tblId)를 찾고 kosis_items 로 항목·분류를 본 뒤 find_data(source:"kosis", kosis:{orgId,tblId,itmId,objL1,…,prdSe,year}) 로 받는다. 인증키: 환경 변수 KOSIS_API_KEY 또는 set_kosis_key.' },
@@ -19,6 +19,17 @@ async function getJson(url) {
   const r = await fetch(url, { headers: UA });
   if (!r.ok) throw new Error(`자료를 받지 못함 ${r.status}: ${url}`);
   return r.json();
+}
+async function worldBankPages(url, notFound) {
+  const records = [];
+  let pages = 1;
+  for (let page = 1; page <= pages; page++) {
+    const result = await getJson(page === 1 ? url : `${url}&page=${page}`);
+    if (!Array.isArray(result?.[1])) throw new Error(notFound);
+    records.push(...result[1]);
+    pages = Number(result[0]?.pages ?? 1);
+  }
+  return records;
 }
 function csvLine(line) {
   const out = []; let cur = '', q = false;
@@ -36,21 +47,22 @@ const koName = new Intl.DisplayNames(['ko'], { type: 'region' });
 // 결과 모양: { title, unit, cite, year, rows:[{ id, name, values:{ 열: 값 }, year }] }
 export async function findData({ source, indicators = [], regions = [], year, years }) {
   if (source === 'worldbank') {
-    const meta = (await getJson('https://api.worldbank.org/v2/country?format=json&per_page=400'))[1];
+    const meta = await worldBankPages('https://api.worldbank.org/v2/country?format=json&per_page=400', '세계은행 국가 목록을 읽지 못함');
     const iso2 = Object.fromEntries(meta.map((c) => [c.id, c.iso2Code]));
     const rows = {};
-    const range = years || (year ? `${year}` : '2000:2025');
+    const range = year ?? (years === true ? null : years || `2000:${new Date().getUTCFullYear()}`);
+    const params = new URLSearchParams({ format: 'json', per_page: '1000' });
+    if (range !== null) params.set('date', String(range));
     for (const ind of indicators) {
-      const j = await getJson(`https://api.worldbank.org/v2/country/${regions.join(';')}/indicator/${ind}?format=json&date=${range}&per_page=20000`);
-      if (!Array.isArray(j) || !j[1]) throw new Error(`세계은행에 없는 지표이거나 값이 없음: ${ind}`);
-      for (const r of j[1]) {
+      const url = `https://api.worldbank.org/v2/country/${regions.map(encodeURIComponent).join(';')}/indicator/${encodeURIComponent(ind)}?${params}`;
+      for (const r of await worldBankPages(url, `세계은행에 없는 지표이거나 값이 없음: ${ind}`)) {
         if (r.value == null) continue;
         const id = r.countryiso3code || r.country.id;
         const row = (rows[id] ||= { id, name: safeKo(iso2[id], r.country.value), byYear: {} });
         (row.byYear[r.date] ||= {})[ind] = r.value;
       }
     }
-    return pack(rows, indicators, year, '세계은행', SOURCES.worldbank.cite);
+    return pack(rows, indicators, year, '세계은행', SOURCES.worldbank.cite, years === true);
   }
   if (source === 'owid-energy' || source === 'owid-co2') {
     const url = source === 'owid-energy' ? 'https://raw.githubusercontent.com/owid/energy-data/master/owid-energy-data.csv' : 'https://raw.githubusercontent.com/owid/co2-data/master/owid-co2-data.csv';
@@ -73,7 +85,7 @@ export async function findData({ source, indicators = [], regions = [], year, ye
     return pack(rows, indicators, year, source, SOURCES[source].cite, years);
   }
   if (source === 'climate') {
-    // 지점 이름(평가원 기출 지점 한글 이름) · 관측소 영문 이름 · "위도,경도" → 가장 가까운 WMO 관측소의 1991~2020 평년값
+    // 국내·기출 지점 이름, 관측소 영문 이름 또는 좌표로 1991~2020 평년값 조회
     if (!regions.length) throw new Error('지점을 주세요. 예: ["샌프란시스코","이르쿠츠크"] 또는 ["37.57,126.98"]. 기출 지점 목록은 list_exam_climate_spots');
     const units = { temp: '℃', precip: 'mm' };
     const requested = Object.keys(units).filter((name) => !indicators.length || indicators.includes(name));
@@ -167,6 +179,26 @@ export function suggestRegions(rows, indicators, k = 5) {
 let WMO, SPOTS;
 const wmo = () => (WMO ||= load('wmo-normals-1991-2020.json'));
 export const examSpots = () => (SPOTS ||= load('exam-climate-spots.json')).spots;
+// 내장 WMO 자료의 지점 번호(앞의 0 제외)로 대응시킨다.
+const KOREAN_STATIONS = new Map(Object.entries({
+  속초: 47090, 철원: 47095, 동두천: 47098, 파주: 47099, 대관령: 47100,
+  춘천: 47101, 백령도: 47102, 강릉: 47105, 동해: 47106, 서울: 47108,
+  인천: 47112, 원주: 47114, 울릉도: 47115, 수원: 47119, 영월: 47121,
+  충주: 47127, 서산: 47129, 울진: 47130, 청주: 47131, 대전: 47133,
+  추풍령: 47135, 안동: 47136, 상주: 47137, 포항: 47138, 군산: 47140,
+  울산: 47152, 창원: 47155, 광주: 47156, 부산: 47159, 통영: 47162,
+  목포: 47165, 여수: 47168, 흑산도: 47169, 완도: 47170, 고창: 47172,
+  제주: 47184, 고산: 47185, 성산: 47188, 서귀포: 47189, 진주: 47192,
+  강화: 47201, 양평: 47202, 이천: 47203, 인제: 47211, 홍천: 47212,
+  태백: 47216, 정선: 47217, 제천: 47221, 보은: 47226, 천안: 47232,
+  보령: 47235, 부여: 47236, 금산: 47238, 부안: 47243, 임실: 47244,
+  정읍: 47245, 남원: 47247, 장수: 47248, 영광: 47252, 김해: 47253,
+  순창: 47254, 양산: 47257, 강진: 47259, 장흥: 47260, 해남: 47261,
+  고흥: 47262, 의령: 47263, 함양: 47264, 봉화: 47271, 영주: 47272,
+  문경: 47273, 청송: 47276, 영덕: 47277, 의성: 47278, 구미: 47279,
+  영천: 47281, 경주: 47283, 거창: 47284, 합천: 47285, 밀양: 47288,
+  산청: 47289, 거제: 47294, 남해: 47295, 대구: 47860, 전주: 47864,
+}));
 const hav = (a, b, c, d) => { const r = Math.PI / 180, x = Math.sin(((c - a) * r) / 2) ** 2 + Math.cos(a * r) * Math.cos(c * r) * Math.sin(((d - b) * r) / 2) ** 2; return 12742 * Math.asin(Math.sqrt(x)); };
 export function nearestStations(lat, lon, n = 3) {
   return wmo().stations.map((s) => ({ s, d: hav(lat, lon, s[3], s[4]) })).sort((a, b) => a.d - b.d).slice(0, n);
@@ -174,7 +206,7 @@ export function nearestStations(lat, lon, n = 3) {
 function climateRow(q) {
   const W = wmo();
   const spot = examSpots().find((x) => x.name === q);
-  let lat, lon, label = q, exam = null;
+  let lat, lon, station, exam = null;
   if (spot) {
     if (spot.lat == null) throw new Error(`'${q}'는 특정 지점이 아니라 좌표가 없습니다. 쓸 관측소 이름이나 "위도,경도"를 주세요.`);
     ({ lat, lon } = spot); exam = { code: spot.code, exams: spot.exams };
@@ -188,16 +220,19 @@ function climateRow(q) {
   } else if (/^-?\d+(\.\d+)?\s*,\s*-?\d+(\.\d+)?$/.test(q)) {
     [lat, lon] = q.split(',').map(Number);
   } else {
-    const st = W.stations.find((s) => s[1].toLowerCase() === q.toLowerCase().replace(/\s+/g, ''));
-    if (!st) {
+    const stationName = q.normalize('NFC').trim();
+    const koreanId = KOREAN_STATIONS.get(stationName.replace(/(?:특별시|광역시|[시군])$/, ''));
+    station = koreanId
+      ? W.stations.find((s) => s[2].trim() === 'Rep._Korea' && Number(s[0]) === koreanId)
+      : W.stations.find((s) => s[1].toLowerCase() === stationName.toLowerCase().replace(/\s+/g, ''));
+    if (!station) {
       const near = W.stations.filter((s) => s[1].toLowerCase().includes(q.toLowerCase().slice(0, 4))).slice(0, 8).map((s) => `${s[1]}(${s[2].trim()})`);
-      throw new Error(`'${q}' 지점을 찾지 못함. 평가원 기출 지점 한글 이름, 관측소 영문 이름, 또는 "위도,경도"를 주세요.${near.length ? ' 비슷한 관측소: ' + near.join(', ') : ''}`);
+      throw new Error(`'${q}' 지점을 찾지 못함. 국내 관측소 한글 이름, 평가원 기출 지점 이름, 관측소 영문 이름, 또는 "위도,경도"를 주세요.${near.length ? ' 비슷한 관측소: ' + near.join(', ') : ''}`);
     }
-    [lat, lon] = [st[3], st[4]];
   }
-  const [{ s, d }] = nearestStations(lat, lon, 1);
+  const { s, d } = station ? { s: station, d: 0 } : nearestStations(lat, lon, 1)[0];
   const warn = d > 50 ? `가장 가까운 관측소가 ${Math.round(d)}km 떨어져 있음 — 값이 실제 지점과 다를 수 있음 [확인 필요]` : null;
-  return { id: label, name: label, station: s[1], country: s[2].trim(), distanceKm: Math.round(d), lat: s[3], lon: s[4], height: s[5], exam, warn, values: { temp: s[6], precip: s[7] } };
+  return { id: q, name: q, station: s[1], country: s[2].trim(), distanceKm: Math.round(d), lat: s[3], lon: s[4], height: s[5], exam, warn, values: { temp: s[6], precip: s[7] } };
 }
 
 // ---- KOSIS 공유서비스(OpenAPI) ----

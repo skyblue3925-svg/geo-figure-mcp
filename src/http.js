@@ -13,6 +13,7 @@ import path from 'node:path';
 import crypto from 'node:crypto';
 import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
 import { createServer } from './tools.js';
+import { createReferences } from './references.js';
 
 const PORT = +(process.env.PORT || 8787);
 const PUBLIC_URL = (process.env.PUBLIC_URL || `http://localhost:${PORT}`).replace(/\/$/, '');
@@ -28,6 +29,7 @@ let day = '', dayCount = 0;
 const dailyOver = () => { const d = new Date().toISOString().slice(0, 10); if (d !== day) { day = d; dayCount = 0; } return ++dayCount > DAILY_MAX; };
 fs.mkdirSync(FILES, { recursive: true });
 
+const references = createReferences(true);
 const publish = {
   newDir: () => { const d = path.join(FILES, crypto.randomBytes(12).toString('hex')); fs.mkdirSync(d, { recursive: true }); return d; },
   keepText: KEEP_MIN >= 60 ? `${Math.round(KEEP_MIN / 60)}시간` : `${KEEP_MIN}분`,
@@ -36,6 +38,8 @@ const publish = {
 
 // 오래된 파일 지우기(5분마다)
 setInterval(() => {
+  references.previews.purge();
+  references.datasets.purge();
   for (const d of fs.readdirSync(FILES)) {
     const p = path.join(FILES, d);
     try { if (Date.now() - fs.statSync(p).mtimeMs > KEEP_MS) fs.rmSync(p, { recursive: true, force: true }); } catch {}
@@ -88,7 +92,7 @@ const server = http.createServer(async (req, res) => {
     if (isMake && limited(ip, 'make', MAKE_PER_HOUR, 3600 * 1000)) return send(res, 429, { error: '같은 접속 IP에서는 최근 1시간에 ' + MAKE_PER_HOUR + '번까지 파일을 만들 수 있습니다.' });
     if (isMake && dailyOver()) return send(res, 429, { error: '오늘 서버 전체 사용량을 다 썼습니다. 내일 다시 쓰거나 내 컴퓨터에 설치해 쓰세요.' });
     try {
-      const mcp = createServer({ remote: true, publish });
+      const mcp = createServer({ remote: true, publish, references });
       const transport = new StreamableHTTPServerTransport({ sessionIdGenerator: undefined, enableJsonResponse: true });
       res.on('close', () => { transport.close(); mcp.close(); });
       await mcp.connect(transport);
