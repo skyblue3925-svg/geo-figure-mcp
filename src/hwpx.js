@@ -195,6 +195,16 @@ export function buildHwpx(figs, opts = {}) {
   const landscape = drawings.some(({ W }) => W > PAGE_W - 2 * ML);
   // 쪽에 다 안 들어가는 그림은 제목부터 다음 쪽으로 넘긴다(넘치면 한글이 그림을 앞 그림 위에 겹쳐 놓는다)
   const usable = (landscape ? PAGE_W : PAGE_H) - 2 * MT - u(5) - u(7) - u(6);
+  const question = opts.question;
+  const choiceLines = question?.choices.map((s, i) => '①②③④⑤'[i] + ' ' + s);
+  if (question) {
+    const pageWidth = (landscape ? PAGE_H : PAGE_W) - 2 * ML;
+    const lines = [question.stem, ...choiceLines];
+    if (drawings.length !== 1 || drawings[0].W > pageWidth || drawings[0].H + u(8 + 3 + 5 * 5.6) > usable ||
+        lines.some(line => u(textWidth(line, 10)) > pageWidth - u(3))) {
+      throw new Error('문항과 그림이 A4 한 쪽에 들어가지 않습니다. 그림 크기나 기호 길이를 줄이세요.');
+    }
+  }
   const body = [];
   let used = 0;
   drawings.forEach(({ f, cont, H }, k) => {
@@ -202,10 +212,15 @@ export function buildHwpx(figs, opts = {}) {
     const need = u(8) + H + u(8);
     const brk = k > 0 && used + need > usable;
     used = brk ? need : used + need;
-    body.push(P(`<hp:run charPrIDRef="${cTitle}">${first}<hp:t>${esc(f.title || '')}</hp:t></hp:run>`, paraPr('LEFT', 130, u(2))).replace('pageBreak="0"', `pageBreak="${brk ? 1 : 0}"`));
+    body.push(P(`<hp:run charPrIDRef="${cTitle}">${first}<hp:t>${esc(question?.stem ?? f.title ?? '')}</hp:t></hp:run>`, paraPr('LEFT', 130, u(2))).replace('pageBreak="0"', `pageBreak="${brk ? 1 : 0}"`));
     // 그림은 '글 앞으로' 띄우고, 그림 높이만큼 고정 높이 문단으로 자리를 비운다 → 묶음을 풀어도 조각이 밀리지 않는다
-    body.push(P(`<hp:run charPrIDRef="${cBody}">${cont}<hp:t/></hp:run>`, paraPr('LEFT', 100, u(8), H)));
+    body.push(P(`<hp:run charPrIDRef="${cBody}">${cont}<hp:t/></hp:run>`, paraPr('LEFT', 100, u(question ? 3 : 8), H)));
   });
+  if (question) {
+    for (const line of choiceLines) {
+      body.push(P(`<hp:run charPrIDRef="${cBody}"><hp:t>${esc(line)}</hp:t></hp:run>`, paraPr('LEFT', 100, 0, u(5.6))));
+    }
+  }
   if (opts.tables?.length) {
     body.push(...tableAppendix(opts.tables, { width: (landscape ? PAGE_H : PAGE_W) - 2 * ML,
       usable, next, P, charPr, paraPr, esc, firstSection: drawings.length ? '' : secPr(landscape) }));

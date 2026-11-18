@@ -63,11 +63,11 @@ export async function makeFigure(spec, st = loadStyle()) {
   return withFooter(figure({ title: spec.title, items: placed, source, notes: spec.notes }), st);
 }
 
-export function exportFigures(figs, { outDir, name = '지리자료', formats = ['pptx', 'hwpx'], answerKey, style, tables } = {}) {
+export function exportFigures(figs, { outDir, name = '지리자료', formats = ['pptx', 'hwpx'], answerKey, style, tables, question } = {}) {
   const st = style || loadStyle();
   fs.mkdirSync(outDir, { recursive: true });
   const files = [];
   if (formats.includes('pptx')) { const f = path.join(outDir, `${name}.pptx`); fs.writeFileSync(f, buildPptx(figs, { style: st, keyText: answerKey })); files.push(f); }
-  if (formats.includes('hwpx')) { const f = path.join(outDir, `${name}.hwpx`); fs.writeFileSync(f, buildHwpx(figs, { style: st, keyText: answerKey, tables })); files.push(f); }
+  if (formats.includes('hwpx')) { const f = path.join(outDir, `${name}.hwpx`); fs.writeFileSync(f, buildHwpx(figs, { style: st, keyText: answerKey, tables, question })); files.push(f); }
   return files;
 }

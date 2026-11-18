@@ -89,6 +89,44 @@ try {
     }
   }
   console.log('Verified WMO observations, teacher CSV, student table and plotted coordinates:', checked);
+  const choices = [
+    { kind: 'match', left: 'A', right: '(가)' },
+    { kind: 'temperature', month: 1, left: 'B', right: 'D', direction: 'greater' },
+    { kind: 'jjaPrecipitation', left: 'A', right: '(나)', direction: 'greater' },
+    { kind: 'temperatureRange', left: '(가)', right: '(다)', direction: 'greater' },
+    { kind: 'precipitation', month: 7, left: 'C', right: 'A', direction: 'greater' },
+  ];
+  const verify = choices => query('check_climate_question', { previewId, choices });
+  const question = await verify(choices);
+  assert.deepEqual(question.checks.map(c => c.correct), [false, false, true, false, false]);
+  assert.equal(question.answer, 3);
+  assert.deepEqual(question.checks.slice(1).map(c => [c.evidence.leftValue, c.evidence.rightValue]),
+    [[0.9, 6.1], [892.1, 598.4], [21.1, 28.1], [223.9, 414.4]]);
+  for (const [index, count] of [[2, 0], [3, 2]]) {
+    const revised = choices.map((choice, i) => i === index ? { ...choice, direction: 'less' } : choice);
+    const result = await verify(revised);
+    assert.equal(result.correctCount, count);
+    assert.equal(result.answer, null);
+    assert.equal(result.questionId, undefined);
+  }
+  const questionArgs = { ...args, previewId, questionId: question.questionId, name: '한국지리_네_지점의_기후_문항_학생용' };
+  const exam = await query('make_figures', questionArgs);
+  assert.equal(exam.files.length, 1);
+  const examXml = section(exam.files[0]);
+  assert.ok(examXml.includes(question.stem));
+  assert.ok(!examXml.includes('정답') && !examXml.includes('pageBreak="1"') && !cities.some(c => examXml.includes('<hp:t>' + c + '</hp:t>')));
+  for (const [i, check] of question.checks.entries()) assert.ok(examXml.includes('①②③④⑤'[i] + ' ' + check.text));
+  for (const invalid of [{ previewId: 'unrelated' }, { formats: ['pptx'] }, { appendTable: true }]) {
+    const result = await client.callTool({ name: 'make_figures', arguments: { ...questionArgs, ...invalid } });
+    assert.equal(result.isError, true);
+  }
+  if (process.env.GEO_QUESTION_EXAMPLE_DIR) {
+    const dest = process.env.GEO_QUESTION_EXAMPLE_DIR;
+    fs.mkdirSync(dest, { recursive: true });
+    fs.copyFileSync(exam.files[0], path.join(dest, path.basename(exam.files[0])));
+    fs.copyFileSync(csv.files[0], path.join(dest, 'observations.csv'));
+    fs.writeFileSync(path.join(dest, 'verification.json'), JSON.stringify(question));
+  }
   const append = await query('make_figures', { ...args, name: '자료표 시험', previewId, appendTable: true, audience: 'student', formats: ['hwpx'] });
   const appendix = section(append.files[0]);
   assert.ok(appendix.includes('<hp:tbl ') && appendix.includes('월평균 기온') && !appendix.includes('정답표'));
