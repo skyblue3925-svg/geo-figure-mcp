@@ -1,5 +1,8 @@
 import { listRegions } from './maps.js';
 import { CLASS_FILLS } from './scene.js';
+import { climateAnswerEntries, relabelClimateFigure } from './climate-linked.js';
+
+export { makeClimateFigure } from './climate-linked.js';
 
 function text(value) {
   return typeof value === 'string' ? value.trim() : '';
@@ -38,13 +41,16 @@ function categoryLabels(chartRegions, regions, labels) {
   return categories;
 }
 
-export function makeLinkedFigure(data, { indicator, within, breaks, top, labels = {}, title } = {}) {
+export function makeLinkedFigure(data, { indicator, within, breaks, top, labels = {}, title, digits } = {}) {
   if (!text(indicator)) throw new Error('indicator에 자료의 지표 이름을 지정하세요.');
   if (!Array.isArray(breaks) || breaks.length < 1 || breaks.length >= CLASS_FILLS.length ||
       breaks.some((value, i) => !Number.isFinite(value) || (i > 0 && value <= breaks[i - 1]))) {
     throw new Error('breaks에는 유한한 숫자 1~' + (CLASS_FILLS.length - 1) + '개를 오름차순으로 지정하세요.');
   }
   if (top !== undefined && (!Number.isSafeInteger(top) || top < 1)) throw new Error('top에는 양의 정수를 지정하세요.');
+  if (digits !== undefined && (!Number.isInteger(digits) || digits < 0 || digits > 6)) {
+    throw new Error('digits에는 0~6 사이 정수를 지정하세요.');
+  }
   if (!Array.isArray(data?.rows) || !data.rows.length) throw new Error('자료에 지역 행이 없습니다.');
 
   const seoulDaytime = data.title === '서울 자치구 상주·주간 인구' && String(data.year) === '2020';
@@ -102,16 +108,18 @@ export function makeLinkedFigure(data, { indicator, within, breaks, top, labels 
   const chart = {
     type: 'bar',
     categories: categoryLabels(chartRegions, regions, symbols),
-    series: [{ name: indicator, values: plotted.map((r) => r.value) }],
+    series: [{ name: indicator, values: plotted.map((r) => digits === undefined ? r.value : Number(r.value.toFixed(digits))) }],
     unit,
   };
   const cite = text(data.cite);
+  const sourceUrl = text(data.sourceUrl);
   const source = [cite, period && !cite.includes(period) ? period : ''].filter(Boolean).join(', ');
   return {
     title: text(title) || text(data.title) || indicator,
     source,
     parts: [{ map }, { chart }],
-    link: { version: 1, mapPart: 0, chartPart: 1, indicator, unit, regions, chartRegions },
+    link: { version: 1, mapPart: 0, chartPart: 1, indicator, unit, regions, chartRegions,
+      ...(digits === undefined ? {} : { digits }), metadata: { period, cite, ...(sourceUrl ? { sourceUrl } : {}) } },
   };
 }
 
@@ -137,6 +145,7 @@ function chartLabels(chart) {
 }
 
 export function relabelFigure(figure, { partIndex = 0, labels }) {
+  if (figure.link?.kind === 'climate') return relabelClimateFigure(figure, { partIndex, labels });
   const parts = figure.parts || [figure];
   const map = parts[partIndex]?.map;
   if (!map) throw new Error('기호를 수정할 지도 부분이 없습니다.');
@@ -177,6 +186,11 @@ export function figureAnswerKey(figures) {
   const sections = [];
   for (const [i, figure] of figures.entries()) {
     const link = figure.link?.version === 1 ? figure.link : undefined;
+    const heading = figures.length > 1 ? [(i + 1) + '. ' + (figure.title || '그림')] : [];
+    if (link?.kind === 'climate') {
+      sections.push([...heading, ...climateAnswerEntries(link)].join('\n'));
+      continue;
+    }
     const map = figure.parts?.[link?.mapPart ?? figure.legacyLabelMapPart]?.map;
     if (!map?.labels) continue;
     const labels = Object.entries(map.labels).sort(([, a], [, b]) => a.localeCompare(b, 'ko', { numeric: true }));
@@ -185,7 +199,7 @@ export function figureAnswerKey(figures) {
       const region = link?.regions.find((r) => r.mapName === name);
       return symbol + ' = ' + name + (region ? ' (' + link.indicator + ' ' + region.value + ' ' + link.unit + ')' : '');
     });
-    sections.push([...(figures.length > 1 ? [(i + 1) + '. ' + (figure.title || '그림')] : []), ...entries].join('\n'));
+    sections.push([...heading, ...entries].join('\n'));
   }
   return sections.length ? ['정답표', ...sections].join('\n') : undefined;
 }

@@ -70,7 +70,7 @@ const server = http.createServer(async (req, res) => {
     if (rel.length !== 2 || !/^[0-9a-f]{24}$/.test(rel[0]) || rel[1].includes('..') || rel[1].includes('/') || rel[1].includes('\\')) return send(res, 404, { error: 'not found' });
     const p = path.join(FILES, rel[0], rel[1]);
     if (!fs.existsSync(p)) return send(res, 404, { error: '파일이 없습니다(이미 받았거나 보관 시간이 지나 지워졌습니다).' });
-    const type = p.endsWith('.pptx') ? 'application/vnd.openxmlformats-officedocument.presentationml.presentation' : p.endsWith('.hwpx') ? 'application/hwp+zip' : 'application/octet-stream';
+    const type = p.endsWith('.pptx') ? 'application/vnd.openxmlformats-officedocument.presentationml.presentation' : p.endsWith('.hwpx') ? 'application/hwp+zip' : p.endsWith('.csv') ? 'text/csv; charset=utf-8' : 'application/octet-stream';
     res.writeHead(200, { 'Content-Type': type, 'Content-Disposition': `attachment; filename*=UTF-8''${encodeURIComponent(rel[1])}`, 'Access-Control-Allow-Origin': '*' });
     const st = fs.createReadStream(p);
     st.on('end', () => { try { fs.rmSync(p, { force: true }); const d = path.dirname(p); if (!fs.readdirSync(d).length) fs.rmSync(d, { recursive: true, force: true }); } catch {} });

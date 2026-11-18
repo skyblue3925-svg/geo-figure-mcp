@@ -1,3 +1,4 @@
+import { tableAppendix } from './hwpx-table.js';
 // 장면 → HWPX. 그림 한 장 = 한글 '묶음 개체' 하나. 안의 다각형·선·글상자는 묶음을 풀면 하나씩 고칠 수 있다.
 // 글꼴은 한글 기본 글꼴(함초롬)을 기본으로 써서 어느 PC 에서도 바뀌지 않게 한다.
 import fs from 'node:fs';
@@ -64,13 +65,13 @@ export function buildHwpx(figs, opts = {}) {
   };
   const PP = new Map();
   // fixed: 줄 높이를 HWPUNIT 로 고정(그림 자리 비우기)
-  const paraPr = (align, line = 100, next = 0, fixed = 0) => {
-    const k = `${align}|${line}|${next}|${fixed}`;
+  const paraPr = (align, line = 100, next = 0, fixed = 0, wrapWords = false) => {
+    const k = `${align}|${line}|${next}|${fixed}|${wrapWords}`;
     if (PP.has(k)) return PP.get(k);
     const m = header.match(/<hh:paraProperties itemCnt="(\d+)">/);
     const id = +m[1];
     const mg = (s) => `<hh:margin><hc:intent value="0" unit="HWPUNIT"/><hc:left value="0" unit="HWPUNIT"/><hc:right value="0" unit="HWPUNIT"/><hc:prev value="0" unit="HWPUNIT"/><hc:next value="${next * s}" unit="HWPUNIT"/></hh:margin>${fixed ? `<hh:lineSpacing type="FIXED" value="${fixed * s}" unit="HWPUNIT"/>` : `<hh:lineSpacing type="PERCENT" value="${line}" unit="HWPUNIT"/>`}`;
-    const xml = `<hh:paraPr id="${id}" tabPrIDRef="0" condense="0" fontLineHeight="0" snapToGrid="0" suppressLineNumbers="0" checked="0" textDir="LTR"><hh:align horizontal="${align}" vertical="BASELINE"/><hh:heading type="NONE" idRef="0" level="0"/><hh:breakSetting breakLatinWord="KEEP_WORD" breakNonLatinWord="KEEP_WORD" widowOrphan="0" keepWithNext="0" keepLines="0" pageBreakBefore="0" lineWrap="BREAK"/><hh:autoSpacing eAsianEng="0" eAsianNum="0"/><hp:switch><hp:case hp:required-namespace="http://www.hancom.co.kr/hwpml/2016/HwpUnitChar">${mg(1)}</hp:case><hp:default>${mg(2)}</hp:default></hp:switch><hh:border borderFillIDRef="2" offsetLeft="0" offsetRight="0" offsetTop="0" offsetBottom="0" connect="0" ignoreMargin="0"/></hh:paraPr>`;
+    const xml = `<hh:paraPr id="${id}" tabPrIDRef="0" condense="0" fontLineHeight="0" snapToGrid="0" suppressLineNumbers="0" checked="0" textDir="LTR"><hh:align horizontal="${align}" vertical="BASELINE"/><hh:heading type="NONE" idRef="0" level="0"/><hh:breakSetting breakLatinWord="${wrapWords ? 'BREAK_WORD' : 'KEEP_WORD'}" breakNonLatinWord="${wrapWords ? 'BREAK_WORD' : 'KEEP_WORD'}" widowOrphan="0" keepWithNext="0" keepLines="0" pageBreakBefore="0" lineWrap="BREAK"/><hh:autoSpacing eAsianEng="0" eAsianNum="0"/><hp:switch><hp:case hp:required-namespace="http://www.hancom.co.kr/hwpml/2016/HwpUnitChar">${mg(1)}</hp:case><hp:default>${mg(2)}</hp:default></hp:switch><hh:border borderFillIDRef="2" offsetLeft="0" offsetRight="0" offsetTop="0" offsetBottom="0" connect="0" ignoreMargin="0"/></hh:paraPr>`;
     header = header.replace(m[0], `<hh:paraProperties itemCnt="${id + 1}">`).replace('</hh:paraProperties>', xml + '</hh:paraProperties>');
     PP.set(k, id);
     return id;
@@ -162,7 +163,7 @@ export function buildHwpx(figs, opts = {}) {
     }
     if (it.t === 'poly') return it.rings.filter((r, i) => !it.rings.some((o, j) => j !== i && ringArea(o) > ringArea(r) && inside(r[0], o))).forEach((r) => objs.push(polygon(r, it.fill, it.stroke, it.name)));
     if (it.t === 'line') {
-      const pts = simplifyLine(it.pts);
+      const pts = it.keepVertices ? it.pts : simplifyLine(it.pts);
       for (let i = 1; i < pts.length; i++) objs.push(seg(pts[i - 1], pts[i], { ...it, arrow: it.arrow && i === pts.length - 1 }));
       return;
     }
@@ -172,7 +173,7 @@ export function buildHwpx(figs, opts = {}) {
     if (it.t === 'text') objs.push(text(it));
   }
 
-  const P = (inner, pp) => `<hp:p id="0" paraPrIDRef="${pp}" styleIDRef="0" pageBreak="0" columnBreak="0" merged="0">${inner}</hp:p>`;
+  const P = (inner, pp, pageBreak = false) => `<hp:p id="0" paraPrIDRef="${pp}" styleIDRef="0" pageBreak="${Number(pageBreak)}" columnBreak="0" merged="0">${inner}</hp:p>`;
   const cTitle = charPr(10, true), cBody = charPr(10, false);
   const drawings = figs.map((f, k) => {
     // 개체가 묶음 밖으로 나가면 한글이 묶음을 줄여 버린다 → 실제 범위를 재고, 음수면 옮겨서 다시 만든다
@@ -205,6 +206,10 @@ export function buildHwpx(figs, opts = {}) {
     // 그림은 '글 앞으로' 띄우고, 그림 높이만큼 고정 높이 문단으로 자리를 비운다 → 묶음을 풀어도 조각이 밀리지 않는다
     body.push(P(`<hp:run charPrIDRef="${cBody}">${cont}<hp:t/></hp:run>`, paraPr('LEFT', 100, u(8), H)));
   });
+  if (opts.tables?.length) {
+    body.push(...tableAppendix(opts.tables, { width: (landscape ? PAGE_H : PAGE_W) - 2 * ML,
+      usable, next, P, charPr, paraPr, esc, firstSection: drawings.length ? '' : secPr(landscape) }));
+  }
   if (opts.keyText) {
     opts.keyText.split('\n').forEach((l, i) => body.push(`<hp:p id="0" paraPrIDRef="${paraPr('LEFT', 150)}" styleIDRef="0" pageBreak="${i === 0 ? 1 : 0}" columnBreak="0" merged="0"><hp:run charPrIDRef="${i === 0 ? cTitle : cBody}"><hp:t>${esc(l)}</hp:t></hp:run></hp:p>`));
   }

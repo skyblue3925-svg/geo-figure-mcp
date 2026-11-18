@@ -1,4 +1,4 @@
-# geo-figure-mcp — 지리 시험용 지도·그래프 만들기 (0.2.8)
+# geo-figure-mcp — 지리 시험용 지도·그래프 만들기 (0.2.9)
 
 만든 사람: barkhan (지리 교사)
 
@@ -83,6 +83,18 @@ AI에게 "서울 자치구 주간 인구 지수 지도랑 산점도, 구 이름�
 4. 연결된 기호의 지역 대응표는 로컬에서는 파일 마지막 장, 원격에서는 대화에 제공됩니다. 자료·시안 ID는 공유받은 사람이 사용할 수 있습니다. 서버 재시작, 보관 개수 초과 또는 최대 30분 경과 후에는 다시 조회하거나 시안을 만드세요.
 
 국내 기후는 `서울`, `강릉`, `대구`, `제주`처럼 한글 관측소 이름으로 조회합니다. 세계은행은 `years:true`로 국가별 연도별 값을, `year:2020`으로 한 해의 값을 조회합니다.
+
+## 기후 비교 그림과 원자료 표
+
+“서울·강릉·대구·제주를 지도 기호 A~D로 표시하고 월별 기온·강수량 그래프 순서를 섞어 줘. 학생용 한글 파일과 교사용 원자료 CSV를 만들어 줘.”
+
+1. `find_data`에서 `source:"climate"`, `regions:["서울","강릉","대구","제주"]`, `asReference:true`로 자료를 조회합니다.
+2. `preview_figures`에 `{"climate":{"dataId":"자료 ID"}}`를 보냅니다. 기본값은 지도 기호 A~D, 그래프 기호 (가)~(라)입니다. 원하는 그래프 순서를 도시 이름으로 `chartOrder`에 지정할 수 있습니다.
+3. `get_source_table`에 `previewId`와 `audience:"teacher"` 또는 `"student"`를 보내 같은 그림의 표를 봅니다. 교사용에는 실제 지점·출처가, 학생용에는 그래프 기호별 월별 값이 나옵니다.
+4. 시안을 확인한 후 `make_figures`에 같은 ID, `confirmed:true`와 `formats:["hwpx"], audience:"student"`를 보내 학생용 그림을 저장합니다. 학생용 문서에는 정답이 들어가지 않습니다. HWPX 뒤에 표를 붙이려면 `appendTable:true`를 추가합니다.
+5. 같은 ID와 `formats:["csv"], audience:"teacher"`로 교사용 표를 따로 받습니다. CSV에는 기준 기간, 자료 유형, 출처 링크가 포함됩니다. 지역 통계 표에는 지도 전체 지역의 원값·지도 구간·순위와 막대에 실제 쓰인 값이 들어갑니다. `linked.digits`는 막대 값의 소수 자리만 정합니다.
+
+웹 연결에서 ‘figures 필수’가 뜨면 이전 도구 목록을 쓰고 있을 수 있습니다. 서버가 이 기능을 지원할 때 `preview_figures({"figures":[{"climate":{"dataId":"자료 ID"}}]})`와 `make_figures({"figures":[{"previewId":"시안 ID"}],"confirmed":true,"formats":["hwpx"],"audience":"student"})`로도 참조할 수 있습니다. 새 도구나 인자 자체가 보이지 않으면 클라이언트에서 연결의 도구 목록을 새로 불러오세요.
 
 ## 내장 통계와 지도 이름 맞추기
 

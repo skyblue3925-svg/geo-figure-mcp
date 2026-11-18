@@ -1,6 +1,6 @@
 {
   "name": "geo-figure-mcp",
-  "version": "0.2.8",
+  "version": "0.2.9",
   "description": "지리 시험용 지도·그래프를 도형 하나하나 고칠 수 있는 PPTX·HWPX로 만드는 MCP 서버",
   "author": "barkhan",
   "mcpName": "io.github.skyblue3925-svg/geo-figure-mcp",
@@ -21,7 +21,7 @@
     "examples": "node examples/run.js",
     "start:remote": "node src/http.js",
     "demo": "node examples/demo.js",
-    "test": "node tests/smoke.js && node tests/climate-worldbank.js && node tests/linked.js && node tests/references.js && node tests/remote-workflow.js"
+    "test": "node tests/smoke.js && node tests/climate-worldbank.js && node tests/linked.js && node tests/references.js && node tests/remote-workflow.js && node tests/source-workflow.js"
   },
   "keywords": [
     "mcp",

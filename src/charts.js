@@ -115,7 +115,7 @@ export function climateChart(spec, st = DEFAULT_STYLE) {
     const bw = (R - L) / 12;
     const bars = s.precip.map((p, m) => S.rect(L + bw * m + bw * 0.15, sp(p), bw * 0.7, B - sp(p), { fill: { k: 'solid', gray: '#BFBFBF' }, stroke: 0.15, name: `${m + 1}월 강수` }));
     g.push(S.group('강수량 막대', bars));
-    g.push(S.line(s.temp.map((t, m) => [L + bw * m + bw / 2, sy(t)]), { stroke: 0.45, name: '기온 선' }));
+    g.push({ ...S.line(s.temp.map((t, m) => [L + bw * m + bw / 2, sy(t)]), { stroke: 0.45, name: '기온 선' }), keepVertices: true });
     [1, 4, 7, 10, 12].forEach((m) => g.push(S.text(L + bw * (m - 1) + bw / 2, B + 2.4, String(m), { size: st.small - 1, name: '월' })));
     items.push(S.group(`기후 그래프 ${s.label}`, g));
   });

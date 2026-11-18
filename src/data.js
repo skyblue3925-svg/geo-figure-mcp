@@ -105,7 +105,7 @@ export async function findData({ source, indicators = [], regions = [], year, ye
     const columns = d.columns.map((name, i) => [name, i])
       .filter(([name]) => !requested.size || requested.has(name));
     const pick = regions.length ? regions : Object.keys(d.rows).filter((k) => k !== '서울특별시');
-    return { title: '서울 자치구 상주·주간 인구', unit: '명, 지수', cite: SOURCES['seoul-daytime'].cite, year: '2020', rows: pick.map((n) => {
+    return { title: '서울 자치구 상주·주간 인구', unit: '명, 지수', cite: d.source, sourceUrl: kosisTableUrl('101', 'DT_1PA2020'), year: '2020', rows: pick.map((n) => {
       const v = d.rows[n];
       if (!v) throw new Error(`없는 자치구: ${n}`);
       return { id: n, name: n, values: Object.fromEntries(columns.map(([name, i]) => [name, v[i]])) };
@@ -205,6 +205,7 @@ export function nearestStations(lat, lon, n = 3) {
 }
 function climateRow(q) {
   const W = wmo();
+  const period = '1991~2020';
   const spot = examSpots().find((x) => x.name === q);
   let lat, lon, station, exam = null;
   if (spot) {
@@ -215,7 +216,18 @@ function climateRow(q) {
       const c = spot.climate;
       const isGrid = c.source === 'Beck-0.1';
       const warn = isGrid ? '관측소 자료가 부족해 0.1°(약 11km) 격자 추정값(Beck 외 2023, CC BY 4.0)을 씀 — 관측값이 아님' : c.tier === 2 ? `기록이 짧은 관측소(${c.years}년, ${c.distanceKm}km) — 값이 불안정할 수 있음 [확인 필요]` : c.distanceKm > 50 ? `관측소가 ${c.distanceKm}km 떨어짐 [확인 필요]` : null;
-      return { id: q, name: q, station: c.station, country: '', distanceKm: c.distanceKm, lat, lon, height: c.elev, exam, warn, cite: isGrid ? 'Beck et al.(2023) 0.1° 기후 자료(1991~2020)' : `NOAA GHCN-Daily ${c.station}(1991~2020 중 ${c.years}년)`, values: { temp: c.temp, precip: c.precip } };
+      const provenance = isGrid ? {
+        dataType: 'Beck 외 0.1° 격자 추정값',
+        sourceUrl: 'https://doi.org/10.6084/m9.figshare.21789074',
+        cite: 'Beck et al.(2023) 0.1° 기후 자료(1991~2020)',
+      } : {
+        dataType: 'NOAA GHCN-Daily 일별 관측 집계',
+        stationId: c.id,
+        observationYears: c.years,
+        sourceUrl: `https://www.ncei.noaa.gov/data/global-historical-climatology-network-daily/access/${c.id}.csv`,
+        cite: `NOAA GHCN-Daily ${c.station}(1991~2020 중 ${c.years}년)`,
+      };
+      return { id: q, name: q, station: c.station, country: '', distanceKm: c.distanceKm, lat, lon, height: c.elev, exam, warn, period, ...provenance, values: { temp: c.temp, precip: c.precip } };
     }
   } else if (/^-?\d+(\.\d+)?\s*,\s*-?\d+(\.\d+)?$/.test(q)) {
     [lat, lon] = q.split(',').map(Number);
@@ -232,7 +244,12 @@ function climateRow(q) {
   }
   const { s, d } = station ? { s: station, d: 0 } : nearestStations(lat, lon, 1)[0];
   const warn = d > 50 ? `가장 가까운 관측소가 ${Math.round(d)}km 떨어져 있음 — 값이 실제 지점과 다를 수 있음 [확인 필요]` : null;
-  return { id: q, name: q, station: s[1], country: s[2].trim(), distanceKm: Math.round(d), lat: s[3], lon: s[4], height: s[5], exam, warn, values: { temp: s[6], precip: s[7] } };
+  return {
+    id: q, name: q, station: s[1], stationId: s[0], country: s[2].trim(), distanceKm: Math.round(d),
+    lat: s[3], lon: s[4], height: s[5], exam, warn, period,
+    cite: SOURCES.climate.cite, dataType: 'WMO 관측 평년값', sourceUrl: 'https://doi.org/10.25921/800j-vn07',
+    values: { temp: s[6], precip: s[7] },
+  };
 }
 
 // ---- KOSIS 공유서비스(OpenAPI) ----
@@ -275,6 +292,7 @@ export async function kosisItems({ orgId, tblId }) {
 }
 // 수록 주기 한글 → API 코드
 const PRD_CODE = { 년: 'Y', 반기: 'H', 분기: 'Q', 월: 'M', 일: 'D', 부정기: 'IR', '2년': 'F', '3년': 'F', '4년': 'F', '5년': 'F', '10년': 'F' };
+const kosisTableUrl = (orgId, tblId) => `https://kosis.kr/statHtml/statHtml.do?${new URLSearchParams({ orgId, tblId })}`;
 // kosis: { orgId, tblId, itmId:'T1' 또는 'T1+T2', objL1:'ALL', objL2, …, prdSe:'Y', year:2020 (또는 start,end) }
 async function kosisData(q) {
   if (!q.orgId || !q.tblId || !q.itmId) throw new Error('kosis 에 orgId·tblId·itmId 가 필요합니다 (kosis_search → kosis_items 로 확인).');
@@ -306,7 +324,7 @@ async function kosisData(q) {
     r.year = x.PRD_DE;
   }
   const yrs = [...new Set(Object.values(rows).map((r) => r.year))];
-  return { title, unit, cite: `${q.orgId === "101" ? "국가데이터처(통계청)" : "KOSIS"}, 「${title}」`, year: yrs.join('·'), rows: Object.values(rows) };
+  return { title, unit, cite: `${q.orgId === "101" ? "국가데이터처(통계청)" : "KOSIS"}, 「${title}」`, sourceUrl: kosisTableUrl(q.orgId, q.tblId), year: yrs.join('·'), rows: Object.values(rows) };
 }
 
 // ---- 내장 KOSIS 통계 묶음(data/kosis): 인증키 없이 쓴다 ----
@@ -393,7 +411,7 @@ export function bundleData(q) {
   const missing = [...provinces].filter((name) => !matchedProvinces.has(name))
     .concat([...regionNames].filter((name) => !matchedRegions.has(name)));
   if (missing.length) throw new Error('선택한 표·기간·분류에 없는 지역: ' + missing.join(', '));
-  return { title: o.title, unit: o.units, cite: o.cite, year: period, fixed, rows: selected, mapEdition, note: `내장 KOSIS 자료(받은 날 ${o.retrieved}). 고정한 분류: ${JSON.stringify(fixed)}. 지도에는 mapName 과 map.edition='${mapEdition}' 을 쓴다(일반구는 null — 시 합계 행을 쓴다)` };
+  return { title: o.title, unit: o.units, cite: o.cite, sourceUrl: o.sourceUrl, year: period, fixed, rows: selected, mapEdition, note: `내장 KOSIS 자료(받은 날 ${o.retrieved}). 고정한 분류: ${JSON.stringify(fixed)}. 지도에는 mapName 과 map.edition='${mapEdition}' 을 쓴다(일반구는 null — 시 합계 행을 쓴다)` };
 }
 
 // 지도 지역 이름(시·도 짧은 이름, '시도 시군구') — 내장 자료와 이름 맞추기용

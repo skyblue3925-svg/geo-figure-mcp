@@ -206,6 +206,21 @@ try {
     assert.doesNotMatch(artifact.allXml, /정답표|[ABC] = 경기/);
   }
 
+  const climateRef = JSON.parse(readText('find_data', await call('find_data', {
+    source: 'climate', regions: ['서울', '강릉', '대구', '제주'], asReference: true,
+  })));
+  const climateId = await preview({ figures: [{ climate: { dataId: climateRef.dataId } }] });
+  const teacherTable = JSON.parse(readText('get_source_table', await call('get_source_table', { previewId: climateId, audience: 'teacher' })));
+  assert.equal(teacherTable.rows.length, 48);
+  const appendix = await download({ ...exportArgs, figures: [{ previewId: climateId }], appendTable: true, audience: 'student' });
+  assert.ok(appendix.section.includes('<hp:tbl ') && !appendix.section.includes('정답표'));
+  const csvArgs = { confirmed: true, previewId: climateId, formats: ['csv'], audience: 'teacher' };
+  const resultCsv = JSON.parse(readText('make_figures', await call('make_figures', csvArgs)));
+  const csvResponse = await request(resultCsv.files[0]);
+  assert.equal(csvResponse.status, 200);
+  assert.equal(csvResponse.headers.get('content-type'), 'text/csv; charset=utf-8');
+  assert.equal((await csvResponse.text()).trimEnd().split('\r\n').length, 49);
+
   const encode = (args) => JSON.stringify(args);
   const measurements = {
     save: { legacy: [encode(legacySave)], compact: [encode(compactSave)] },

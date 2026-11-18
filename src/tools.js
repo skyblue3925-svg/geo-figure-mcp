@@ -3,7 +3,8 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { createReferences } from './references.js';
-import { makeLinkedFigure, relabelFigure, figureAnswerKey } from './linked.js';
+import { sourceTable, tableCsv } from './source-table.js';
+import { makeLinkedFigure, makeClimateFigure, relabelFigure, figureAnswerKey } from './linked.js';
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
 import { SOURCES, findData, transform, round, assignLabels, suggestRegions, examSpots, kosisSearch, kosisItems, setKosisKey, bundleList, withKosisKey } from './data.js';
@@ -50,6 +51,7 @@ const INSTRUCTIONS = [
   '기호를 비교할 때만 4종 시안을 요청한다. 명세가 같으면 previewId를 재사용한다.',
   '행정구역 판은 자료 연도에 맞춘다. 정답표는 로컬 파일 마지막 장 또는 원격 응답에 둔다.',
   '내장 한국 통계 지도+막대는 find_data(asReference:true) → preview_figures(linked) → make_figures(previewId). 시안 기호는 preview_figures(edit)로 바꾼다.',
+  '기후는 find_data(asReference:true), preview_figures(climate:{dataId})를 쓴다. 원자료 표는 요청 시에만 get_source_table(previewId,audience)로 본다.',
   '필요할 때 guide의 topic으로 workflow 또는 spec을 선택한다.',
 ].join('\n');
 const MAX_DATA_BYTES = 256 * 1024;
@@ -80,10 +82,33 @@ const linkedFigure = z.strictObject({
   indicator: z.string(),
   within: z.array(z.string()).min(1).optional().describe('시·군·구 지도 범위. 생략하면 전국 시·도(서울 전용 자료는 서울 자치구)'),
   breaks: z.array(z.number()).min(1).max(5).describe('단계 하한값 목록(오름차순). 예: [100]'),
+  digits: z.number().int().min(0).max(6).optional().describe('막대 값의 소수 자리. 순위와 지도 구간은 원표 값 기준'),
   top: z.number().int().positive().optional().describe('막대만 상위 N곳으로 제한'),
   labels: z.record(z.string(), z.string().min(1)).optional().describe('mapName별 기호'),
   title: z.string().optional(),
 });
+
+const climateFigure = z.strictObject({
+  dataId: z.string(),
+  region: z.enum(['korea', 'world']).optional(),
+  labels: z.record(z.string(), z.string().min(1)).optional().describe('도시별 지도 기호'),
+  chartOrder: z.array(z.string()).optional().describe('그래프에 표시할 도시 순서. 생략하면 자동 배치'),
+  title: z.string().optional(),
+});
+const tableAudience = z.enum(['teacher', 'student']);
+
+// Some older clients validate against a cached schema that requires figures.
+// A single reference inside that array carries the same operation and validation.
+function acceptFigureReference(args, schemas) {
+  if (args.figures?.length !== 1) return args;
+  const item = args.figures[0];
+  for (const [key, schema] of Object.entries(schemas)) {
+    if (!Object.hasOwn(item, key)) continue;
+    if (Object.keys(item).length !== 1 || args[key] !== undefined) throw new Error('참조와 그림 명세를 함께 지정할 수 없습니다.');
+    return { ...args, figures: undefined, [key]: schema.parse(item[key]) };
+  }
+  return args;
+}
 
 function editSavedMap(edit) {
   const { name, path: file } = edit;
@@ -154,16 +179,16 @@ server.tool('find_data', '실제 통계를 찾는다. 결과에 출처(cite)와 
   }).passthrough().optional().describe('source가 bundle일 때 사용. 지도와 그래프에 필요한 항목과 지역만 요청한다.'),
   year: z.number().optional().describe('특정 연도. 비우면 가장 최근'),
   years: z.boolean().optional().describe('true 면 연도별 전체(시계열)'),
-  asReference: z.boolean().optional().describe('내장 시·도·시군구 또는 서울 통계로 지도+막대를 만들 때 true. 행 대신 dataId를 반환'),
+  asReference: z.boolean().optional().describe('한국 통계 또는 기후 자료를 지도·그래프에 연결할 때 true. 행 대신 dataId를 반환'),
 }, wrap(async (a) => {
   if (remote && a.source === 'kosis') throw new Error('원격 서버에서는 내장 자료 bundle을 쓰세요. KOSIS 직접 조회는 로컬에서 가능합니다.');
-  if (a.asReference && !['bundle', 'seoul-daytime'].includes(a.source)) throw new Error('dataId는 bundle 또는 seoul-daytime 통계에서 지원합니다.');
+  if (a.asReference && !['bundle', 'seoul-daytime', 'climate'].includes(a.source)) throw new Error('dataId는 bundle, seoul-daytime, climate 통계에서 지원합니다.');
   const data = await findData(a);
   if (!a.asReference) return data;
   if (!data.rows.length) throw new Error('선택한 조건에 통계 행이 없습니다.');
   if (Buffer.byteLength(JSON.stringify(data)) > MAX_DATA_BYTES) throw new Error('참조할 통계가 너무 큽니다. 지표·지역을 좁혀 주세요.');
   const { title, year, unit, cite, mapEdition } = data;
-  return { dataId: datasets.put(data), rowCount: data.rows.length, title, year, unit, cite, mapEdition, indicators: Object.keys(data.rows[0].values) };
+  return { dataId: datasets.put({ source: a.source, data }), rowCount: data.rows.length, title, year, unit, cite, mapEdition, indicators: Object.keys(data.rows[0].values) };
 }));
 
 server.tool('list_exam_climate_spots', '평가원 기후 기출 지점. 후보 이름과 기후 기호만 필요하면 summary:true를 쓴다.', {
@@ -235,18 +260,34 @@ server.tool('assign_labels', '지역 이름을 A~E 또는 (가)~(마) 기호로 
   seed: z.number().optional(),
 }, wrap((a) => assignLabels(a.names, a)));
 
+server.tool('get_source_table', '같은 시안의 그림에 사용한 자료표를 본다. 교사용은 지명·출처, 학생용은 그림 기호를 사용한다.', {
+  previewId: z.string(),
+  audience: tableAudience,
+  figure: z.number().int().positive().optional().describe('여러 그림 중 번호(1부터)'),
+}, wrap(({ previewId, audience, figure }) => {
+  const preview = previews.get(previewId);
+  if (!preview) throw new Error('시안 ID가 없거나 만료되었습니다. 시안을 다시 만드세요.');
+  if (!figure && preview.figures.length !== 1) throw new Error('자료표를 볼 그림 번호(figure)를 지정하세요.');
+  const spec = preview.figures[(figure || 1) - 1];
+  if (!spec) throw new Error('해당 그림 번호가 없습니다.');
+  return sourceTable(spec, audience);
+}));
+
 server.tool('make_figures', '그림 명세로 PPTX·HWPX 파일을 만든다. 만들기 전에 교사에게 계획 요약을 보여 주고 확인을 받았는지 먼저 확인한다. 명세 작성법은 guide.', {
   figures: figureSpecs.optional().describe('그림 명세 목록. guide의 spec 참고'),
   previewId: z.string().optional().describe('확인한 시안 ID. figures 대신 사용'),
   labelStyle: z.enum(['halo', 'plain', 'box', 'circle']).optional().describe('기호 비교 시안에서 교사가 선택한 스타일'),
   name: z.string().default('지리자료').describe('파일 이름(확장자 제외)'),
-  formats: z.array(z.enum(['pptx', 'hwpx'])).default(['pptx', 'hwpx']),
+  formats: z.array(z.enum(['pptx', 'hwpx', 'csv'])).min(1).default(['pptx', 'hwpx']),
+  appendTable: z.boolean().optional().describe('HWPX에 그림에 사용한 자료표를 덧붙인다'),
+  audience: tableAudience.optional().describe('학생용 문서는 정답을 분리한다. 표 기본값은 student. teacher는 지명·출처·기호 대응을 공개한다'),
   answerKey: z.string().optional().describe(remote ? '정답표 — 원격 서버에서는 파일에 넣지 않고 대화창에만 돌려준다(시험 보안)' : '정답표 — 파일 마지막 장에 들어간다. 첫 줄은 제목'),
   ...(remote ? {} : { outDir: z.string().optional().describe(`저장 폴더(기본 ${OUT})`) }),
   style: figureStyle.optional().describe('이번 파일에만 쓸 글꼴·크기(학교 양식)'),
   confirmed: z.boolean().describe('교사가 계획 요약을 보고 "예"라고 했으면 true'),
 }, wrap(async (a) => {
   if (!a.confirmed) throw new Error('먼저 계획 요약(지표·연도·지역·가공·기호 순서·출력·출처)을 교사에게 보여 주고 확인을 받으세요.');
+  a = acceptFigureReference(a, { previewId: z.string().min(1) });
   let { figures, style } = a;
   let st;
   if (a.previewId !== undefined) {
@@ -263,37 +304,62 @@ server.tool('make_figures', '그림 명세로 PPTX·HWPX 파일을 만든다. �
     throw new Error('figures 또는 previewId를 보내세요. labelStyle은 지도 명세 안에 지정할 수 있습니다.');
   }
   if (remote && figures.length > 12) throw new Error('한 번에 그림은 12장까지 만들 수 있습니다.');
+  if (a.appendTable && !a.formats.includes('hwpx')) throw new Error('자료표를 붙이려면 formats에 hwpx를 포함하세요.');
+  const wantsCsv = a.formats.includes('csv');
+  const wantsTable = wantsCsv || a.appendTable;
+  const audience = a.audience || 'student';
+  const tables = wantsTable ? figures.map(f => sourceTable(f, audience)) : [];
   st ??= { ...loadStyle(), ...style };
   const figs = [];
-  for (const f of figures) figs.push(await makeFigure(f, st));
-  const safe = String(a.name || '지리자료').replace(/[\/:*?"<>|]/g, '_').slice(0, 60);
+  const documentFormats = a.formats.filter(format => format !== 'csv');
+  if (documentFormats.length) {
+    for (const f of figures) figs.push(await makeFigure(f, st));
+  }
+  const safe = String(a.name || '지리자료').replace(/[\\/:*?"<>|]/g, '_').slice(0, 60);
+  const suffix = audience === 'teacher' ? '교사용' : '학생용';
+  const docName = a.appendTable || a.audience ? safe + '_' + suffix : safe;
   const dir = remote ? publish.newDir() : (a.outDir || OUT);
   const answerKey = [a.answerKey, figureAnswerKey(figures)].filter(Boolean).join('\n') || undefined;
-  const paths = exportFigures(figs, { outDir: dir, name: safe, formats: a.formats, answerKey: remote ? undefined : answerKey, style: st });
+  const keepKeyInChat = remote || ((wantsTable || a.audience) && audience === 'student');
+  const paths = exportFigures(figs, { outDir: dir, name: docName, formats: documentFormats,
+    answerKey: keepKeyInChat ? undefined : answerKey, tables: a.appendTable ? tables : undefined, style: st });
+  if (wantsCsv) {
+    tables.forEach((table, i) => {
+      const index = tables.length > 1 ? '_' + (i + 1) : '';
+      const file = path.join(dir, safe + '_자료표_' + suffix + index + '.csv');
+      fs.writeFileSync(file, tableCsv(table, figures[i], audience), 'utf8');
+      paths.push(file);
+    });
+  }
   const files = remote ? paths.map((p) => publish.url(p)) : paths;
-  // 고치기용 설계도: 같은 폴더에 <이름>.geo-figure.json — 나중에 open_figure_spec 으로 읽어 일부만 바꿔 다시 만든다
   let specFile = null;
-  if (!remote) { specFile = path.join(dir, `${safe}.geo-figure.json`); fs.writeFileSync(specFile, JSON.stringify({ name: safe, formats: a.formats, style, answerKey: a.answerKey, figures }, null, 1)); }
-  return { files, ...(updateNotice() ? { update: updateNotice() } : {}), ...(remote ? { expires: `내려받기 주소는 ${publish.keepText} 동안, 한 번만 열립니다(받으면 서버에서 바로 지움). 꼭 내려받아 저장하세요.`, ...(answerKey ? { answerKey, answerKeyNote: '시험 보안을 위해 정답표는 파일에 넣지 않았습니다. 이 내용을 교사에게 그대로 보여 주세요.' } : {}) } : {}), sizes_mm: figs.map((f) => ({ title: f.title, w: round(f.w), h: round(f.h) })), ...(specFile ? { specFile } : {}), note: '그림마다 묶음 하나 — PPTX는 그룹 해제, HWPX는 개체 풀기를 한 번만 하면 시군구·기호·선·범례가 모두 따로 움직인다(도형 이름이 지역 이름). 범례 칸과 지역은 같은 무늬라 서식 복사로 단계를 바꿀 수 있다. 시안의 범례·기호는 preview_figures의 edit로 바꿀 수 있다.' };
+  if (!remote && documentFormats.length) {
+    specFile = path.join(dir, docName + '.geo-figure.json');
+    fs.writeFileSync(specFile, JSON.stringify({ name: docName, formats: documentFormats, style, answerKey: a.answerKey, figures }, null, 1));
+  }
+  return { files, ...(updateNotice() ? { update: updateNotice() } : {}), ...(remote ? { expires: `내려받기 주소는 ${publish.keepText} 동안, 한 번만 열립니다(받으면 서버에서 바로 지움). 꼭 내려받아 저장하세요.` } : {}), ...(keepKeyInChat && answerKey ? { answerKey, answerKeyNote: '교사용 정답표입니다.' } : {}), sizes_mm: figs.map((f) => ({ title: f.title, w: round(f.w), h: round(f.h) })), ...(specFile ? { specFile } : {}), note: '그림마다 묶음 하나 — PPTX는 그룹 해제, HWPX는 개체 풀기를 한 번만 하면 시군구·기호·선·범례가 모두 따로 움직인다(도형 이름이 지역 이름). 범례 칸과 지역은 같은 무늬라 서식 복사로 단계를 바꿀 수 있다. 시안의 범례·기호는 preview_figures의 edit로 바꿀 수 있다.' };
 }));
 
 server.tool('preview_figures', '파일을 만들기 전 PNG 시안을 보여 준다. 기호 비교가 필요하면 compareLabelStyles:true를 쓴다. previewId는 make_figures에서 재사용할 수 있다.', {
   figures: figureSpecs.optional().describe('make_figures와 같은 그림 명세'),
   linked: linkedFigure.optional().describe('find_data의 dataId로 같은 통계의 지도와 막대를 함께 생성'),
+  climate: climateFigure.optional().describe('기후 dataId로 지점 지도와 월별 기온·강수량 비교 그래프 생성'),
   edit: editFields.extend({ previewId: z.string() }).optional().describe('기존 시안의 범례·기호를 수정한다'),
   ...(remote ? {} : { saved: savedEdit.optional().describe('로컬 설계도에서 범례·기호만 수정. figures 대신 사용') }),
   compareLabelStyles: z.boolean().optional().describe('true면 첫 지도에 기호 스타일 4개를 비교'),
   style: figureStyle.optional(),
 }, async (a) => {
   try {
+    a = acceptFigureReference(a, { linked: linkedFigure, climate: climateFigure });
     let { figures, style } = a;
     let savedIndex, inheritedStyle;
-    const inputs = [figures, a.saved, a.linked, a.edit].filter(v => v !== undefined);
-    if (inputs.length !== 1) throw new Error('figures, linked, edit 또는 로컬 saved 중 하나만 지정하세요.');
-    if (a.linked) {
-      const data = datasets.get(a.linked.dataId);
-      if (!data) throw new Error('통계 ID가 만료되었거나 없습니다. find_data를 다시 호출하세요.');
-      figures = [makeLinkedFigure(data, a.linked)];
+    const inputs = [figures, a.saved, a.linked, a.climate, a.edit].filter(v => v !== undefined);
+    if (inputs.length !== 1) throw new Error('figures, linked, climate, edit 또는 로컬 saved 중 하나만 지정하세요.');
+    if (a.linked || a.climate) {
+      const entry = datasets.get((a.linked || a.climate).dataId);
+      if (!entry) throw new Error('통계 ID가 만료되었거나 없습니다. find_data를 다시 호출하세요.');
+      if ((entry.source === 'climate') !== Boolean(a.climate)) throw new Error('기후 dataId는 climate, 지역 통계 dataId는 linked에 지정하세요.');
+      figures = [a.climate ? makeClimateFigure(entry.data, a.climate) : makeLinkedFigure(entry.data, a.linked)];
     }
     if (a.edit) {
       if (style || a.compareLabelStyles) throw new Error('edit는 style 또는 기호 비교와 함께 쓸 수 없습니다.');
@@ -325,7 +391,7 @@ server.tool('preview_figures', '파일을 만들기 전 PNG 시안을 보여 준
     const maxBytes = a.saved ? MAX_SAVED_SPEC_BYTES : MAX_PREVIEW_SPEC_BYTES;
     const canReuse = Buffer.byteLength(JSON.stringify({ figures, style })) <= maxBytes;
     if (a.saved && !canReuse) throw new Error('수정된 설계도가 너무 큽니다. open_figure_spec으로 수정하세요.');
-    if ((a.linked || a.edit) && !canReuse) throw new Error('시안이 너무 큽니다. 지역 수를 줄여 다시 만드세요.');
+    if ((a.linked || a.climate || a.edit) && !canReuse) throw new Error('시안이 너무 큽니다. 지역 수를 줄여 다시 만드세요.');
     if (list.length && (savedIndex !== undefined || allFiguresShown) && canReuse) {
       const id = previews.put({ figures, style, st, compareIndex });
       how += '\npreviewId: ' + id + '\nmake_figures에 figures 대신 이 ID를 보내세요.';
