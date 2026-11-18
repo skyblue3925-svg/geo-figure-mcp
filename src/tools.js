@@ -3,6 +3,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { createReferences } from './references.js';
+import { checkRegionalQuestion, regionalChoices } from './regional-question.js';
 import { checkClimateQuestion, climateChoices } from './climate-question.js';
 import { sourceTable, tableCsv } from './source-table.js';
 import { makeLinkedFigure, makeClimateFigure, relabelFigure, figureAnswerKey } from './linked.js';
@@ -52,6 +53,7 @@ const INSTRUCTIONS = [
   '기호를 비교할 때만 4종 시안을 요청한다. 명세가 같으면 previewId를 재사용한다.',
   '행정구역 판은 자료 연도에 맞춘다. 정답표는 로컬 파일 마지막 장 또는 원격 응답에 둔다.',
   '내장 한국 통계 지도+막대는 find_data(asReference:true) → preview_figures(linked) → make_figures(previewId). 시안 기호는 preview_figures(edit)로 바꾼다.',
+  'KOSIS 5지선다는 check_regional_question(previewId,choices)로 검산하고 같은 previewId와 questionId로 저장한다.',
   '기후 5지선다는 check_climate_question(previewId,choices)로 검산하고 같은 previewId와 questionId로 학생용 HWPX를 만든다.',
   '기후는 find_data(asReference:true), preview_figures(climate:{dataId})를 쓴다. 원자료 표는 요청 시에만 get_source_table(previewId,audience)로 본다.',
   '필요할 때 guide의 topic으로 workflow 또는 spec을 선택한다.',
@@ -275,22 +277,26 @@ server.tool('get_source_table', '같은 시안의 그림에 사용한 자료표�
   return sourceTable(spec, audience);
 }));
 
-server.tool('check_climate_question', '기후 시안의 원자료로 다섯 선지를 검산한다. 지도·그래프 대응과 기온·강수량 비교를 지원한다. 정답이 하나이면 학생용 HWPX에 쓸 questionId를 돌려준다.', {
-  previewId: z.string(),
-  choices: climateChoices.describe('left/right는 시안 기호. match는 지도/그래프 순서. greater 또는 less로 두 지점을 비교한다.'),
-}, wrap(({ previewId, choices }) => {
-  const preview = previews.get(previewId);
-  if (preview?.figures.length !== 1) throw new Error('기후 그림이 한 개인 유효한 시안 ID가 필요합니다.');
-  const result = checkClimateQuestion(preview.figures[0], choices);
-  if (result.answer === null) return result;
-  const questionId = references.questions.put({ previewId, stem: result.stem, choices: result.checks.map(c => c.text) });
-  return { ...result, questionId };
-}));
+function registerQuestionTool(name, description, schema, check) {
+  server.tool(name, description, { previewId: z.string(), choices: schema }, wrap(({ previewId, choices }) => {
+    const preview = previews.get(previewId);
+    if (preview?.figures.length !== 1) throw new Error('그림이 한 개인 유효한 시안 ID가 필요합니다.');
+    const result = check(preview.figures[0], choices);
+    if (result.answer === null) return result;
+    const questionId = references.questions.put({ previewId, stem: result.stem, caption: result.caption, choices: result.checks.map(c => c.text) });
+    return { ...result, questionId };
+  }));
+}
+
+registerQuestionTool('check_climate_question', '기후 원자료로 다섯 선지를 검산한다. 정답이 하나이면 학생용 HWPX에 쓸 questionId를 돌려준다.',
+  climateChoices.describe('left/right는 시안 기호. match는 지도/그래프 순서. greater 또는 less로 두 지점을 비교한다.'), checkClimateQuestion);
+registerQuestionTool('check_regional_question', '내장 KOSIS 지도와 막대그래프의 원자료로 다섯 선지를 검산하고 유일 정답일 때 questionId를 돌려준다.',
+  regionalChoices.describe('지역은 인쇄된 이름·기호, band는 범례 문구. chartRank는 표시값 공동순위, coversThreshold는 범례 경계 이상인 모든 지역의 그래프 포함 여부.'), checkRegionalQuestion);
 
 server.tool('make_figures', '그림 명세로 PPTX·HWPX 파일을 만든다. 만들기 전에 교사에게 계획 요약을 보여 주고 확인을 받았는지 먼저 확인한다. 명세 작성법은 guide.', {
   figures: figureSpecs.optional().describe('그림 명세 목록. guide의 spec 참고'),
   previewId: z.string().optional().describe('확인한 시안 ID. figures 대신 사용'),
-  questionId: z.string().optional().describe('검산한 학생용 5지선다 HWPX. check_climate_question의 ID와 같은 previewId를 지정'),
+  questionId: z.string().optional().describe('검산한 학생용 5지선다 HWPX. 검산 도구의 ID와 같은 previewId를 지정'),
   labelStyle: z.enum(['halo', 'plain', 'box', 'circle']).optional().describe('기호 비교 시안에서 교사가 선택한 스타일'),
   name: z.string().default('지리자료').describe('파일 이름(확장자 제외)'),
   formats: z.array(z.enum(['pptx', 'hwpx', 'csv'])).min(1).optional().describe('기본 pptx·hwpx, 문항은 hwpx'),

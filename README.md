@@ -1,4 +1,4 @@
-# geo-figure-mcp — 지리 시험용 지도·그래프 만들기 (0.2.10)
+# geo-figure-mcp — 지리 시험용 지도·그래프 만들기 (0.2.11)
 
 만든 사람: barkhan (지리 교사)
 
@@ -83,6 +83,10 @@ AI에게 "서울 자치구 주간 인구 지수 지도랑 산점도, 구 이름�
 4. 연결된 기호의 지역 대응표는 로컬에서는 파일 마지막 장, 원격에서는 대화에 제공됩니다. 자료·시안 ID는 공유받은 사람이 사용할 수 있습니다. 서버 재시작, 보관 개수 초과 또는 최대 30분 경과 후에는 다시 조회하거나 시안을 만드세요.
 
 국내 기후는 `서울`, `강릉`, `대구`, `제주`처럼 한글 관측소 이름으로 조회합니다. 세계은행은 `years:true`로 국가별 연도별 값을, `year:2020`으로 한 해의 값을 조회합니다.
+
+## 내장 KOSIS 5지선다 문항 검산
+
+`find_data(source:"bundle", asReference:true)`와 `preview_figures(linked)`로 만든 지도·막대 시안의 `previewId`와 선지 5개를 `check_regional_question`에 보냅니다. `chartRank`는 막대 표시값을 기준으로 같은 값에 같은 순위를 줍니다. `bandCount`는 지정한 범례 구간의 지역 수, `sameBand`는 두 지역이 같은 구간인지, `coversThreshold`는 지도에서 지정한 경계 이상인 모든 지역이 그래프에 있는지 확인합니다. `daytimeSurplus`는 주간인구지수 자료에서 주간 인구가 상주 인구보다 지정한 비율 이상 많은지 검산합니다. 예를 들어 `{"kind":"daytimeSurplus","region":"포천시","percent":10}`은 원값을 110과 비교합니다. 지역은 학생에게 보이는 이름·기호를 사용합니다. 정답이 하나이면 같은 시안의 `questionId`로 학생용 HWPX를 저장하고, 교사용 CSV는 같은 `previewId`에 `formats:["csv"], audience:"teacher"`를 지정해 받습니다.
 
 ## 기후 5지선다 문항 검산
 
