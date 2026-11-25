@@ -1,4 +1,4 @@
-# geo-figure-mcp — 지리 시험용 지도·그래프 만들기 (0.2.11)
+# geo-figure-mcp — 지리 시험용 지도·그래프 만들기 (0.2.12)
 
 만든 사람: barkhan (지리 교사)
 
@@ -84,9 +84,34 @@ AI에게 "서울 자치구 주간 인구 지수 지도랑 산점도, 구 이름�
 
 국내 기후는 `서울`, `강릉`, `대구`, `제주`처럼 한글 관측소 이름으로 조회합니다. 세계은행은 `years:true`로 국가별 연도별 값을, `year:2020`으로 한 해의 값을 조회합니다.
 
+## 색·무늬, 건수와 편집한 문항 검산
+
+- `figure.audit.entityFills:true`인 그림은 막대 계열의 이름을 국가·지역 기호로 사용합니다. 실명과 A~D를 혼용할 때 같은 국가의 계열에 같은 `series.entityId`를 지정합니다. 지도의 색이 같은 국가 기호를 의미하는 경우에는 `map.entityIds`에 지역명과 동일한 ID를 지정합니다. 값에 따라 지역색을 나누는 단계구분도에서는 지역별 색이 달라질 수 있습니다.
+- 막대의 단위가 `건`이거나 계열에 `measure:"count"`가 있으면 0 이상의 정수인지 검사합니다. 산점도는 축 이름을 `발생 건수(건)`처럼 표기하거나 `countAxis:"y"`를 지정합니다. 월평균·비율·천 건 단위 자료는 실제 단위를 지정하세요.
+- 시안에 표시된 오류는 `check_figure({previewId})`로 자세히 확인합니다. 같은 그림에서 발견된 색·무늬 또는 건수 오류는 검산과 파일 저장을 막습니다. 외부 PNG는 원본 이미지의 판독값을 `check_figure({observations:{fills:[{entity,where,fill}],counts:[{where,value}]}})`로 보낼 수 있습니다.
+- 순서나 기호를 바꾼 새 시안에는 기존과 같은 검산 도구에 새 `previewId`와 직전 `questionId`를 `previousQuestionId`로 보냅니다. 선지에 인쇄된 기호를 그대로 새 자료에 대입해 계산합니다. 정답이 하나일 때만 새 저장 ID가 발급됩니다. 값이 표시된 묶은 막대는 `check_chart_question`으로 같은 지표의 두 범주를 비교하는 다섯 선지를 검산할 수 있습니다.
+
+## 여러 문항 일괄 검산 및 저장
+
+`check_questions_batch`에 교사가 확인한 시안 1~12개의 문항을 입력 순서대로 보냅니다. 기후·지역 통계·묶은 막대 문항은 `kind`를 각각 `climate`, `regional`, `chart`로 하고 기존 검산 도구와 같은 선지 다섯 개를 `choices`로 지정합니다. 기존 선지를 재사용하려면 `{"kind":"previous","previewId":"새 시안 ID","previousQuestionId":"이전 문항 ID"}`를 보냅니다. 모든 시안을 확인했다면 `confirmed:true`를 지정합니다.
+
+응답 배열의 각 항목에는 학생용 HWPX의 `hwpx` 링크(로컬은 경로), 또는 `revise` 선지 번호만 담깁니다. 복수 정답이면 참인 선지와 판독이 불분명한 선지를 확인합니다. 정답이 0개이거나 그림 자체에 색·무늬 또는 건수 오류가 있으면 전부([1,2,3,4,5])를 표시합니다. 그림 오류의 상세 원인은 `check_figure`에서 볼 수 있습니다. 만료된 시안이나 잘못된 요청은 파일 생성 전에 알려줍니다. 원격 저장 한도는 요청에 담긴 문항 수를 기준으로 적용됩니다.
+
 ## 내장 KOSIS 5지선다 문항 검산
 
-`find_data(source:"bundle", asReference:true)`와 `preview_figures(linked)`로 만든 지도·막대 시안의 `previewId`와 선지 5개를 `check_regional_question`에 보냅니다. `chartRank`는 막대 표시값을 기준으로 같은 값에 같은 순위를 줍니다. `bandCount`는 지정한 범례 구간의 지역 수, `sameBand`는 두 지역이 같은 구간인지, `coversThreshold`는 지도에서 지정한 경계 이상인 모든 지역이 그래프에 있는지 확인합니다. `daytimeSurplus`는 주간인구지수 자료에서 주간 인구가 상주 인구보다 지정한 비율 이상 많은지 검산합니다. 예를 들어 `{"kind":"daytimeSurplus","region":"포천시","percent":10}`은 원값을 110과 비교합니다. 지역은 학생에게 보이는 이름·기호를 사용합니다. 정답이 하나이면 같은 시안의 `questionId`로 학생용 HWPX를 저장하고, 교사용 CSV는 같은 `previewId`에 `formats:["csv"], audience:"teacher"`를 지정해 받습니다.
+`find_data(source:"bundle", asReference:true)`와 `preview_figures(linked)`로 만든 지도·막대 시안의 `previewId`와 선지 5개를 `check_regional_question`에 보냅니다. `chartRank`는 막대 표시값을 기준으로 같은 값에 같은 순위를 줍니다. `bandCount`는 지정한 범례 구간의 지역 수, `sameBand`는 두 지역이 같은 구간인지, `coversThreshold`는 지도에서 지정한 경계 이상인 모든 지역이 그래프에 있는지 확인합니다. `daytimeSurplus`는 주간인구지수 자료에서 주간 인구가 상주 인구보다 지정한 비율 이상 많은지 검산합니다. 예를 들어 `{"kind":"daytimeSurplus","region":"포천시","percent":10}`은 원값을 110과 비교합니다. 지역은 학생에게 보이는 이름·기호를 사용합니다. 검산기는 지도 범례, 지도 기호, 인쇄된 숫자와 막대로 각 선지를 판독할 수 있는지 함께 확인합니다. 수치가 근접해 구분하기 어려우면 새 시안의 `linked.valueLabels`에 `"all"`을 지정해 막대 위에 값을 표시하세요. 선지만 고칠 때는 기존 시안 ID를 사용합니다.
+
+### 학생용 HWPX와 교사용 CSV를 함께 받기
+
+1. 기후 또는 KOSIS 검산 도구에 `previewId`, 다섯 선지와 `responseMode:"compact"`를 보냅니다. 저장 가능한 문항이면 정답 번호·정답 수·`questionId`를 받습니다. 수정이 필요하면 응답에서 해당 선지와 사유를 확인합니다.
+2. 시안을 확인한 후 `make_figures`에 `{"confirmed":true,"previewId":"시안 ID","questionId":"문항 ID","questionPack":true,"responseMode":"compact"}`를 보냅니다. 학생에게는 `studentHwpx`를 전달하고, 교사는 `teacherCsv`를 보관합니다.
+3. 해설이 필요할 때 `get_question_review({"questionId":"문항 ID"})`로 선지별 정오·근거를 조회합니다.
+
+### 주간인구지수와 통근·통학 순유입을 함께 읽기
+
+“2020년 경기도 포천시와 화성시를 비교해 줘. 주간인구지수가 높은 곳과 통근·통학 순유입 인원이 많은 곳을 함께 묻는 5지선다 문항을 만들고 학생용 한글과 교사용 CSV를 줘.”
+
+`daytime-population` 내장표에서 같은 기간의 `주간 인구 지수`, `유입 인구-계`, `유출 인구-계`를 함께 요청합니다. `bundle.regions`에 두 지역의 지도 이름을 넣고 `asReference:true`로 받은 ID를 `preview_figures`에서 재사용합니다. `linked.indicator`는 `주간 인구 지수`, `linked.comparison`은 `daytimeNetInflow`입니다. 순유입은 같은 지역·기간의 통근·통학 유입에서 유출을 뺀 인원입니다. `higherPair` 선지에는 비교할 두 지역(`left`, `right`)과 각 지표에서 더 큰 지역(`higherIndex`, `higherNet`)의 인쇄 기호나 이름을 지정합니다.
 
 ## 기후 5지선다 문항 검산
 
@@ -149,7 +174,7 @@ AI에게 "서울 자치구 주간 인구 지수 지도랑 산점도, 구 이름�
 
 ## 고치는 법
 - **PowerPoint**: 그림 선택 → 마우스 오른쪽 → 그룹 → 그룹 해제 **한 번**. 시·군·구, 경계선, 범례, 막대가 모두 따로 움직입니다.
-  - 기호(A, (가) 등)는 글자와 흰 테두리가 함께 움직이도록 작은 묶음 하나로 남습니다. 글자를 바꾸려면 그것만 한 번 더 풀면 됩니다.
+  - 지도 기호도 각각 편집할 수 있습니다. 흰 테두리 기호는 글상자 하나에 저장하며, 한글에서는 얇은 흰 바탕을 사용합니다.
   - 도형 이름이 지역 이름입니다(홈 → 정렬 → 선택 창에서 "경기 화성시"처럼 보임).
   - 단계를 손으로 바꿀 땐 범례 칸을 고르고 서식 복사(붓)로 지역에 칠하면 됩니다.
 - **한글**: 그림 선택 → 마우스 오른쪽 → 개체 풀기 **한 번**. 조각이 제자리에 남습니다.

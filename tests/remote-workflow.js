@@ -10,6 +10,7 @@ import path from 'node:path';
 import { setTimeout as delay } from 'node:timers/promises';
 import { fileURLToPath } from 'node:url';
 import { strFromU8, unzipSync } from 'fflate';
+import { choices as chartFixture, countPart, da, energyFigure, ga, na, pop, ra, regions } from './fixtures/figure-audit.js';
 
 const token = 'remote-workflow-test';
 const indicator = '주간 인구 지수';
@@ -220,6 +221,43 @@ try {
   assert.equal(csvResponse.status, 200);
   assert.equal(csvResponse.headers.get('content-type'), 'text/csv; charset=utf-8');
   assert.equal((await csvResponse.text()).trimEnd().split('\r\n').length, 49);
+
+  const figureId = figure => preview({ figures: [figure] });
+  const [energyId, countsId, cleanId, movedId] = await Promise.all([
+    figureId(energyFigure), figureId(countPart), figureId(pop([ga, na, da, ra], regions)), figureId(pop([na, da, ra, ga], regions)),
+  ]);
+  const rawQuestion = await call('check_chart_question', { previewId: cleanId, choices: chartFixture, responseMode: 'compact' });
+  const prior = JSON.parse(readText('check_chart_question', rawQuestion)).questionId;
+  const priorItem = previewId => ({ kind: 'previous', previewId, previousQuestionId: prior });
+  const batchArgs = { confirmed: true, items: [priorItem(energyId), priorItem(countsId), priorItem(cleanId), priorItem(movedId)] };
+  const batch = JSON.parse(readText('check_questions_batch', await call('check_questions_batch', batchArgs)));
+  assert.deepEqual(batch.slice(0, 2), [{ revise: [1,2,3,4,5] }, { revise: [1,2,3,4,5] }]);
+  assert.deepEqual(batch[3], { revise: [2,5] });
+  assert.deepEqual(Object.keys(batch[2]), ['hwpx']);
+  const batchDownload = await request(batch[2].hwpx);
+  assert.equal(batchDownload.status, 200);
+  assert.equal(batchDownload.headers.get('content-type'), 'application/hwp+zip');
+  const batchZip = unzipSync(new Uint8Array(await batchDownload.arrayBuffer()));
+  const studentQuestion = strFromU8(batchZip['Contents/section0.xml']);
+  assert.match(studentQuestion, /①.*출생률/);
+  assert.doesNotMatch(studentQuestion, /정답표/);
+
+  // A 12-item request uses 12 export slots, even when all items need revision.
+  const quota = items => request(base + '/mcp', {
+    method: 'POST', headers: { Authorization: 'Bearer ' + token, Accept: 'application/json, text/event-stream',
+      'Content-Type': 'application/json', 'X-Forwarded-For': '192.0.2.10' },
+    body: JSON.stringify({ jsonrpc: '2.0', id: 2, method: 'tools/call',
+      params: { name: 'check_questions_batch', arguments: { items, confirmed: true } } }),
+  });
+  const repeatItems = Array.from({ length: 12 }, () => priorItem(energyId));
+  for (let n = 0; n < 7; n++) {
+    const response = await quota(repeatItems);
+    assert.equal(response.status, 200);
+    assert.equal(JSON.parse(readText('check_questions_batch', (await response.json()).result)).length, 12);
+  }
+  assert.equal((await quota(repeatItems)).status, 429);
+  assert.equal((await quota(repeatItems.slice(0, 6))).status, 200);
+  assert.equal((await quota(repeatItems.slice(0, 1))).status, 429);
 
   const encode = (args) => JSON.stringify(args);
   const measurements = {

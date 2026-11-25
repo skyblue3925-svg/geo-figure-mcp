@@ -3,7 +3,7 @@ import { tableAppendix } from './hwpx-table.js';
 // 글꼴은 한글 기본 글꼴(함초롬)을 기본으로 써서 어느 PC 에서도 바뀌지 않게 한다.
 import fs from 'node:fs';
 import { zipSync, strToU8 } from 'fflate';
-import { DEFAULT_STYLE, shift } from './scene.js';
+import { DEFAULT_STYLE, flattenShapes, shift } from './scene.js';
 // 한글 글꼴(함초롬) 폭 어림 — 잘리지 않게 넉넉히
 const textWidth = (str, size) => [...String(str)].reduce((w, ch) => w + (/[ㄱ-힣一-鿿]/.test(ch) ? 1 : /[ ]/.test(ch) ? 0.4 : 0.62), 0) * size * 0.3528;
 
@@ -87,16 +87,14 @@ export function buildHwpx(figs, opts = {}) {
     return `<hc:fillBrush><hc:winBrush faceColor="${f.gray || '#FFFFFF'}" hatchColor="#000000" hatchStyle="${HATCH[f.p] || 'SLASH'}" alpha="0"/></hc:fillBrush>`;
   };
   const shadow = '<hp:shadow type="NONE" color="#B2B2B2" offsetX="0" offsetY="0" alpha="0"/>';
-  // 묶음 안 개체의 공통 머리 — 위치는 '바로 위 묶음' 기준 offset 과 transMatrix 로 준다.
-  // ctx: 지금 묶음의 원점(HWPUNIT)과 깊이. ext: 지금 묶음 안 개체들의 실제 범위(절대 좌표)
-  // chain: 바깥부터 각 안쪽 묶음의 위치(바로 위 묶음 기준). 한글은 이 값을 단계별 scaMatrix 의 e3·e6 에 따로 적는다
-  let ext = null, ctx = { ox: 0, oy: 0, level: 1, chain: [] };
-  const mats = (level, chain) => Array.from({ length: level + 1 }, (_, k) => k >= 1 && k < level && chain[k - 1] ? `<hc:scaMatrix e1="1" e2="0" e3="${chain[k - 1][0]}" e4="0" e5="1" e6="${chain[k - 1][1]}"/><hc:rotMatrix ${I}/>` : `<hc:scaMatrix ${I}/><hc:rotMatrix ${I}/>`).join('');
+  // All exported shape offsets are relative to the outer figure.
+  let ext = null;
+  const childMatrices = (`<hc:scaMatrix ${I}/><hc:rotMatrix ${I}/>`).repeat(2);
   const grow = (X, Y, W, H) => { ext = ext ? [Math.min(ext[0], X), Math.min(ext[1], Y), Math.max(ext[2], X + W), Math.max(ext[3], Y + H)] : [X, Y, X + W, Y + H]; };
   const headU = (tag, Xa, Ya, W, H, extra = '') => {
     grow(Xa, Ya, W, H);
-    const X = Xa - ctx.ox, Y = Ya - ctx.oy;
-    return `<hp:${tag} id="0" zOrder="0" numberingType="NONE" textWrap="IN_FRONT_OF_TEXT" textFlow="BOTH_SIDES" lock="0" dropcapstyle="None" href="" groupLevel="${ctx.level}" instid="${next()}"${extra}><hp:offset x="${X}" y="${Y}"/><hp:orgSz width="${W}" height="${H}"/><hp:curSz width="0" height="0"/><hp:flip horizontal="0" vertical="0"/><hp:rotationInfo angle="0" centerX="${Math.round(W / 2)}" centerY="${Math.round(H / 2)}" rotateimage="1"/><hp:renderingInfo><hc:transMatrix e1="1" e2="0" e3="${X}" e4="0" e5="1" e6="${Y}"/>${mats(ctx.level, ctx.chain)}</hp:renderingInfo>`;
+    const X = Xa, Y = Ya;
+    return `<hp:${tag} id="0" zOrder="0" numberingType="NONE" textWrap="IN_FRONT_OF_TEXT" textFlow="BOTH_SIDES" lock="0" dropcapstyle="None" href="" groupLevel="1" instid="${next()}"${extra}><hp:offset x="${X}" y="${Y}"/><hp:orgSz width="${W}" height="${H}"/><hp:curSz width="0" height="0"/><hp:flip horizontal="0" vertical="0"/><hp:rotationInfo angle="0" centerX="${Math.round(W / 2)}" centerY="${Math.round(H / 2)}" rotateimage="1"/><hp:renderingInfo><hc:transMatrix e1="1" e2="0" e3="${X}" e4="0" e5="1" e6="${Y}"/>${childMatrices}</hp:renderingInfo>`;
   };
   const head = (tag, x, y, w, h, extra = '') => headU(tag, u(x), u(y), Math.max(u(w), 1), Math.max(u(h), 1), extra);
   const rectPts = (w, h) => `<hc:pt0 x="0" y="0"/><hc:pt1 x="${u(w)}" y="0"/><hc:pt2 x="${u(w)}" y="${u(h)}"/><hc:pt3 x="0" y="${u(h)}"/>`;
@@ -125,42 +123,14 @@ export function buildHwpx(figs, opts = {}) {
     let bx = x, bw = w;
     const body = `<hp:p id="0" paraPrIDRef="${paraPr(align)}" styleIDRef="0" pageBreak="0" columnBreak="0" merged="0"><hp:run charPrIDRef="${charPr(it.size, it.bold, style.font, it.color || '#000000')}"><hp:t>${esc(it.str)}</hp:t></hp:run></hp:p>`;
     const out = head('rect', bx, y, bw, h, ' ratio="0"') + lineShape(0) + (it.box ? fillBrush({ k: 'solid', gray: '#FFFFFF' }) : '') + shadow + `<hp:drawText lastWidth="${u(bw)}" name="" editable="0"><hp:subList id="" textDirection="HORIZONTAL" lineWrap="BREAK" vertAlign="CENTER" linkListIDRef="0" linkListNextIDRef="0" textWidth="0" textHeight="0" hasTextRef="0" hasNumRef="0">${body}</hp:subList><hp:textMargin left="0" right="0" top="0" bottom="0"/></hp:drawText>` + rectPts(bw, h) + '</hp:rect>';
-    if (it.box) {
+    if (it.box || it.halo) {
       // 흰 바탕 상자는 글자 크기에 맞게 좁힌다
       const tw = textWidth(it.str, it.size) + 1.6, nx = it.anchor === 'l' ? it.x - 0.3 : it.anchor === 'r' ? it.x - tw + 0.3 : it.x - tw / 2;
       return head('rect', nx, y, tw, h, ' ratio="0"') + lineShape(0) + fillBrush({ k: 'solid', gray: '#FFFFFF' }) + shadow + `<hp:drawText lastWidth="${u(tw)}" name="" editable="0"><hp:subList id="" textDirection="HORIZONTAL" lineWrap="BREAK" vertAlign="CENTER" linkListIDRef="0" linkListNextIDRef="0" textWidth="0" textHeight="0" hasTextRef="0" hasNumRef="0">${body.replace(`paraPrIDRef="${paraPr(align)}"`, `paraPrIDRef="${paraPr('CENTER')}"`)}</hp:subList><hp:textMargin left="0" right="0" top="0" bottom="0"/></hp:drawText>` + rectPts(tw, h) + '</hp:rect>';
     }
     return out;
   }
-  // 묶음 → 한글 묶음 개체(최대 3단). 이름 있는 묶음(범례·기호·막대 …)을 그대로 살린다
-  const MAX_LEVEL = +(process.env.HWPX_MAX_LEVEL || 3);
-  function emitInto(items, sortPolys) {
-    const polys = items.filter((c) => c.t === 'poly');
-    if (sortPolys && polys.length > 1 && polys.length === items.length) {
-      const parts = polys.flatMap((p) => p.rings.filter((r, i) => !p.rings.some((o, j) => j !== i && ringArea(o) > ringArea(r) && inside(r[0], o))).map((r) => ({ r, p })));
-      parts.sort((a, b) => ringArea(b.r) - ringArea(a.r)).forEach(({ r, p }) => objs.push(polygon(r, p.fill, p.stroke, p.name)));
-    } else items.forEach(emit);
-  }
   function emit(it) {
-    if (it.t === 'group') {
-      const drawable = it.items.filter(Boolean);
-      if (ctx.level >= MAX_LEVEL || drawable.length < 2) return emitInto(drawable, true);
-      // 1차: 절대 좌표로 범위만 잰다
-      const saveObjs = objs.splice(0), saveExt = ext, saveCtx = ctx;
-      ext = null; ctx = { ...saveCtx, level: saveCtx.level + 1, chain: [...saveCtx.chain, [0, 0]] };
-      emitInto(drawable, true);
-      const box = ext;
-      objs.length = 0;
-      if (!box) { objs.push(...saveObjs); ext = saveExt; ctx = saveCtx; return; }
-      // 2차: 묶음 원점 기준으로 다시 만든다
-      ext = null; ctx = { ox: box[0], oy: box[1], level: saveCtx.level + 1, chain: [...saveCtx.chain, [box[0] - saveCtx.ox, box[1] - saveCtx.oy]] };
-      emitInto(drawable, true);
-      const kids = objs.splice(0);
-      objs.push(...saveObjs); ext = saveExt; ctx = saveCtx;
-      const W = Math.max(box[2] - box[0], 1), H = Math.max(box[3] - box[1], 1);
-      objs.push(headU('container', box[0], box[1], W, H).replace(' numberingType="NONE"', ' numberingType="NONE"') + kids.join('') + `<hp:shapeComment>${esc(it.name || '묶음')}</hp:shapeComment></hp:container>`);
-      return;
-    }
     if (it.t === 'poly') return it.rings.filter((r, i) => !it.rings.some((o, j) => j !== i && ringArea(o) > ringArea(r) && inside(r[0], o))).forEach((r) => objs.push(polygon(r, it.fill, it.stroke, it.name)));
     if (it.t === 'line') {
       const pts = it.keepVertices ? it.pts : simplifyLine(it.pts);
@@ -177,9 +147,7 @@ export function buildHwpx(figs, opts = {}) {
   const cTitle = charPr(10, true), cBody = charPr(10, false);
   const drawings = figs.map((f, k) => {
     // 개체가 묶음 밖으로 나가면 한글이 묶음을 줄여 버린다 → 실제 범위를 재고, 음수면 옮겨서 다시 만든다
-    // 한글은 '하나짜리 묶음'을 풀지 못한다 → 그림 안이 묶음 하나뿐이면 한 겹 벗긴다
-    let items = f.items;
-    while (items.length === 1 && items[0].t === 'group') items = items[0].items;
+    const items = flattenShapes(f.items);
     objs.length = 0; ext = null;
     items.forEach(emit);
     if (ext[0] < 0 || ext[1] < 0) {

@@ -1,10 +1,10 @@
+import { auditFigureData, auditObservations, requireCleanFigureData } from './figure-audit.js';
+import { BATCH_TOOL, batchItems, exportCheckedBatch, questionDocument, questionTypes } from './batch-question.js';
 // geo-figure-mcp 도구 정의 — 로컬(stdio)·원격(HTTP) 공용. createServer({ remote, publish }) 로 만든다.
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { createReferences } from './references.js';
-import { checkRegionalQuestion, regionalChoices } from './regional-question.js';
-import { checkClimateQuestion, climateChoices } from './climate-question.js';
 import { sourceTable, tableCsv } from './source-table.js';
 import { makeLinkedFigure, makeClimateFigure, relabelFigure, figureAnswerKey } from './linked.js';
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
@@ -12,6 +12,7 @@ import { z } from 'zod';
 import { SOURCES, findData, transform, round, assignLabels, suggestRegions, examSpots, kosisSearch, kosisItems, setKosisKey, bundleList, withKosisKey } from './data.js';
 import { listRegions } from './maps.js';
 import { makeFigure, exportFigures, loadStyle, saveStyle } from './build.js';
+import { buildHwpx } from './hwpx.js';
 import { renderPng } from './svg.js';
 import { CHARTS } from './charts.js';
 import { LANDFORM_PRESETS } from './terrain.js';
@@ -53,8 +54,10 @@ const INSTRUCTIONS = [
   '기호를 비교할 때만 4종 시안을 요청한다. 명세가 같으면 previewId를 재사용한다.',
   '행정구역 판은 자료 연도에 맞춘다. 정답표는 로컬 파일 마지막 장 또는 원격 응답에 둔다.',
   '내장 한국 통계 지도+막대는 find_data(asReference:true) → preview_figures(linked) → make_figures(previewId). 시안 기호는 preview_figures(edit)로 바꾼다.',
-  'KOSIS 5지선다는 check_regional_question(previewId,choices)로 검산하고 같은 previewId와 questionId로 저장한다.',
-  '기후 5지선다는 check_climate_question(previewId,choices)로 검산하고 같은 previewId와 questionId로 학생용 HWPX를 만든다.',
+  '5지선다는 check_regional_question 또는 check_climate_question에 previewId, choices, responseMode:"compact"를 보내 검산한다. 선지별 근거는 get_question_review(questionId)로 조회한다.',
+  '국가별 색이나 건수 경고는 check_figure(previewId)로 본다. 순서·기호 변경 후에는 이전 questionId를 previousQuestionId로 보내 새 시안을 검산한다.',
+  '확인한 시안의 문항 여러 개는 check_questions_batch로 검산해 학생용 HWPX를 한 번에 저장한다.',
+  '검산 후 같은 previewId와 questionId로 학생용 HWPX를 만든다. 교사용 원자료 CSV도 필요하면 questionPack:true, responseMode:"compact"로 두 파일을 함께 받는다.',
   '기후는 find_data(asReference:true), preview_figures(climate:{dataId})를 쓴다. 원자료 표는 요청 시에만 get_source_table(previewId,audience)로 본다.',
   '필요할 때 guide의 topic으로 workflow 또는 spec을 선택한다.',
 ].join('\n');
@@ -84,6 +87,8 @@ const editFields = savedEdit.omit({ name: true, path: true });
 const linkedFigure = z.strictObject({
   dataId: z.string(),
   indicator: z.string(),
+  comparison: z.literal('daytimeNetInflow').optional().describe('주간 인구 지수와 유입·유출 차이(명)를 함께 비교'),
+  valueLabels: z.literal('all').optional().describe('모든 막대에 표시값을 인쇄'),
   within: z.array(z.string()).min(1).optional().describe('시·군·구 지도 범위. 생략하면 전국 시·도(서울 전용 자료는 서울 자치구)'),
   breaks: z.array(z.number()).min(1).max(5).describe('단계 하한값 목록(오름차순). 예: [100]'),
   digits: z.number().int().min(0).max(6).optional().describe('막대 값의 소수 자리. 순위와 지도 구간은 원표 값 기준'),
@@ -100,6 +105,7 @@ const climateFigure = z.strictObject({
   title: z.string().optional(),
 });
 const tableAudience = z.enum(['teacher', 'student']);
+const responseMode = z.enum(['compact', 'full']).optional().describe('compact는 검산 결과 또는 파일 위치만 반환. 기본 full');
 
 // Some older clients validate against a cached schema that requires figures.
 // A single reference inside that array carries the same operation and validation.
@@ -147,6 +153,34 @@ function editMap(sourceFigures, { figure, part, legend, labelStyle, labels }) {
   figures[index] = target.parts ? { ...target, parts: parts.map((item, i) => i === partIndex ? changed : item) } : changed;
   if (labels && Object.keys(labels).length) figures[index] = relabelFigure(figures[index], { partIndex, labels });
   return { figures, index };
+}
+
+function saveQuestionPack({ figure, drawing, question, style, name, outDir, publish }) {
+  const student = buildHwpx([drawing], { style, question });
+  const teacher = tableCsv(sourceTable(figure, 'teacher'), figure, 'teacher');
+  const directories = [], files = [];
+  try {
+    if (!publish) fs.mkdirSync(outDir, { recursive: true });
+    const studentDir = publish ? publish.newDir() : fs.mkdtempSync(path.join(outDir, '문항-'));
+    directories.push(studentDir);
+    // The student URL must not give away the teacher file's download token.
+    const teacherDir = publish ? publish.newDir() : studentDir;
+    if (publish) directories.push(teacherDir);
+    const studentFile = path.join(studentDir, name + '_학생용.hwpx');
+    const teacherFile = path.join(teacherDir, name + '_교사용_원자료.csv');
+    for (const [file, data] of [[studentFile, student], [teacherFile, teacher]]) {
+      files.push(file);
+      fs.writeFileSync(file, data);
+    }
+    return {
+      studentHwpx: publish ? publish.url(studentFile) : studentFile,
+      teacherCsv: publish ? publish.url(teacherFile) : teacherFile,
+    };
+  } catch (error) {
+    for (const file of files) fs.rmSync(file, { force: true });
+    for (const dir of directories) fs.rmdirSync(dir);
+    throw error;
+  }
 }
 
 export function createServer({ remote = false, publish = null, references = createReferences(remote) } = {}) {
@@ -277,26 +311,82 @@ server.tool('get_source_table', '같은 시안의 그림에 사용한 자료표�
   return sourceTable(spec, audience);
 }));
 
-function registerQuestionTool(name, description, schema, check) {
-  server.tool(name, description, { previewId: z.string(), choices: schema }, wrap(({ previewId, choices }) => {
+server.tool('check_figure', '시안의 국가별 색·무늬와 건수 자료를 검산한다. 기존 이미지에 대해서는 판독한 관측값을 전달한다.', {
+  previewId: z.string().optional(),
+  figures: figureSpecs.optional(),
+  observations: auditObservations.optional().describe('PNG에서 확인한 fills(entity,where,fill), counts(where,value)'),
+}, wrap(({ previewId, figures, observations }) => {
+  if ([previewId, figures, observations].filter(v => v !== undefined).length !== 1) {
+    throw new Error('previewId, figures, observations 중 하나를 지정하세요.');
+  }
+  const specs = previewId === undefined ? figures : previews.get(previewId)?.figures;
+  if (!specs && !observations) throw new Error('시안 ID가 없거나 만료되었습니다.');
+  return { ...auditFigureData(specs ?? [], observations), source: observations ? 'observations' : 'spec' };
+}));
+
+function registerQuestionTool({ name, schema, check }, description, choiceDescription) {
+  server.tool(name, description, {
+    previewId: z.string(),
+    choices: (choiceDescription ? schema.describe(choiceDescription) : schema).optional(),
+    previousQuestionId: z.string().optional().describe('편집한 시안에서 직전 문항의 다섯 선지를 그대로 재검산'),
+    responseMode,
+  }, wrap(({ previewId, choices, previousQuestionId, responseMode }) => {
     const preview = previews.get(previewId);
     if (preview?.figures.length !== 1) throw new Error('그림이 한 개인 유효한 시안 ID가 필요합니다.');
-    const result = check(preview.figures[0], choices);
-    if (result.answer === null) return result;
-    const questionId = references.questions.put({ previewId, stem: result.stem, caption: result.caption, choices: result.checks.map(c => c.text) });
-    return { ...result, questionId };
+    if ((choices !== undefined) === (previousQuestionId !== undefined)) throw new Error('choices 또는 previousQuestionId 중 하나를 지정하세요.');
+    const previous = previousQuestionId === undefined ? undefined : references.questions.get(previousQuestionId);
+    if (previousQuestionId !== undefined && previous?.tool !== name) {
+      throw new Error('같은 검산 도구에서 받은 유효한 이전 문항 ID가 필요합니다.');
+    }
+    const [figure] = preview.figures;
+    requireCleanFigureData([figure]);
+    const selection = previous?.choices ?? choices;
+    const result = check(figure, selection, preview.st);
+    const { answer, correctCount } = result;
+    const change = previous ? { previousAnswer: previous.review.answer } : {};
+    if (answer === null) {
+      const correctChoices = result.checks.filter(c => c.correct).map(c => c.number);
+      const reason = result.reason || '인쇄된 자료에서 옳은 선지가 하나가 되도록 선지를 수정하세요.';
+      if (responseMode !== 'compact') return { ...result, ...change, reason };
+      const unreadable = result.checks.filter(c => c.readable === false).map(c => ({ number: c.number, reason: c.readability }));
+      return { answer, correctCount, correctChoices, ...change, reason, ...(unreadable.length ? { unreadable } : {}) };
+    }
+    const questionId = references.questions.put({ previewId, tool: name, choices: selection, review: result });
+    if (responseMode === 'compact') return { answer, correctCount, ...change, questionId };
+    return { ...result, ...change, questionId };
   }));
 }
 
-registerQuestionTool('check_climate_question', '기후 원자료로 다섯 선지를 검산한다. 정답이 하나이면 학생용 HWPX에 쓸 questionId를 돌려준다.',
-  climateChoices.describe('left/right는 시안 기호. match는 지도/그래프 순서. greater 또는 less로 두 지점을 비교한다.'), checkClimateQuestion);
-registerQuestionTool('check_regional_question', '내장 KOSIS 지도와 막대그래프의 원자료로 다섯 선지를 검산하고 유일 정답일 때 questionId를 돌려준다.',
-  regionalChoices.describe('지역은 인쇄된 이름·기호, band는 범례 문구. chartRank는 표시값 공동순위, coversThreshold는 범례 경계 이상인 모든 지역의 그래프 포함 여부.'), checkRegionalQuestion);
+registerQuestionTool(questionTypes.climate, '기후 원자료로 다섯 선지를 검산한다. 정답이 하나이면 학생용 HWPX에 쓸 questionId를 돌려준다.',
+  'left/right는 시안 기호. match는 지도/그래프 순서. greater 또는 less로 두 지점을 비교한다.');
+registerQuestionTool(questionTypes.regional, '내장 KOSIS 지도와 막대그래프의 원자료로 다섯 선지를 검산하고 유일 정답일 때 questionId를 돌려준다.',
+  '지역은 인쇄된 이름·기호, band는 범례 문구. chartRank는 표시값 공동순위, coversThreshold는 범례 경계 이상인 모든 지역의 그래프 포함 여부.');
+registerQuestionTool(questionTypes.chart, '값을 표시한 묶은 막대그래프에서 다섯 개의 지표·범주 비교 선지를 검산한다.');
+
+server.tool(BATCH_TOOL, '확인한 시안의 문항들을 검산해 학생용 HWPX 링크 또는 수정할 선지 번호만 입력 순서대로 돌려준다.', {
+  items: batchItems,
+  confirmed: z.boolean().describe('교사가 모든 시안을 확인했으면 true'),
+  ...(remote ? {} : { outDir: z.string().optional() }),
+}, wrap(({ items, confirmed, outDir }) => {
+  if (!confirmed) throw new Error('모든 시안을 교사가 먼저 확인해야 합니다.');
+  if (remote && !publish) throw new Error('원격 파일 게시 설정을 확인하세요.');
+  return exportCheckedBatch(items, { references, outDir: outDir || OUT, publish: remote ? publish : null });
+}));
+
+server.tool('get_question_review', '검산한 문항의 선지·정오·수치 근거를 다시 조회한다.', {
+  questionId: z.string(),
+}, wrap(({ questionId }) => {
+  const entry = references.questions.get(questionId);
+  if (!entry) throw new Error('문항 ID가 없거나 만료되었습니다. 선지를 다시 검산하세요.');
+  return { ...entry.review, questionId };
+}));
 
 server.tool('make_figures', '그림 명세로 PPTX·HWPX 파일을 만든다. 만들기 전에 교사에게 계획 요약을 보여 주고 확인을 받았는지 먼저 확인한다. 명세 작성법은 guide.', {
   figures: figureSpecs.optional().describe('그림 명세 목록. guide의 spec 참고'),
   previewId: z.string().optional().describe('확인한 시안 ID. figures 대신 사용'),
   questionId: z.string().optional().describe('검산한 학생용 5지선다 HWPX. 검산 도구의 ID와 같은 previewId를 지정'),
+  questionPack: z.boolean().optional().describe('같은 검산 문항의 학생용 HWPX와 교사용 원자료 CSV를 별도 파일로 생성'),
+  responseMode,
   labelStyle: z.enum(['halo', 'plain', 'box', 'circle']).optional().describe('기호 비교 시안에서 교사가 선택한 스타일'),
   name: z.string().default('지리자료').describe('파일 이름(확장자 제외)'),
   formats: z.array(z.enum(['pptx', 'hwpx', 'csv'])).min(1).optional().describe('기본 pptx·hwpx, 문항은 hwpx'),
@@ -310,10 +400,13 @@ server.tool('make_figures', '그림 명세로 PPTX·HWPX 파일을 만든다. �
   if (!a.confirmed) throw new Error('먼저 계획 요약(지표·연도·지역·가공·기호 순서·출력·출처)을 교사에게 보여 주고 확인을 받으세요.');
   a = acceptFigureReference(a, { previewId: z.string().min(1) });
   let question;
+  if (a.questionPack && !a.questionId) throw new Error('문항 묶음에는 검산을 통과한 questionId와 같은 previewId가 필요합니다.');
   if (a.questionId !== undefined) {
-    question = references.questions.get(a.questionId);
-    if (!question || a.previewId !== question.previewId) throw new Error('같은 시안의 유효한 questionId와 previewId를 함께 지정하세요.');
-    if (a.audience === 'teacher' || a.appendTable || a.answerKey || a.formats?.some(f => f !== 'hwpx')) {
+    const entry = references.questions.get(a.questionId);
+    if (!entry || a.previewId !== entry.previewId) throw new Error('같은 시안의 유효한 questionId와 previewId를 함께 지정하세요.');
+    question = questionDocument(entry.review);
+    const invalidFormats = a.formats && (!a.formats.includes('hwpx') || a.formats.some(f => f !== 'hwpx' && !(a.questionPack && f === 'csv')));
+    if (a.audience === 'teacher' || a.appendTable || a.answerKey || invalidFormats) {
       throw new Error('검산 문항은 정답표와 부록을 분리한 학생용 HWPX 한 장으로 저장합니다.');
     }
   }
@@ -334,18 +427,26 @@ server.tool('make_figures', '그림 명세로 PPTX·HWPX 파일을 만든다. �
     throw new Error('figures 또는 previewId를 보내세요. labelStyle은 지도 명세 안에 지정할 수 있습니다.');
   }
   if (remote && figures.length > 12) throw new Error('한 번에 그림은 12장까지 만들 수 있습니다.');
+  requireCleanFigureData(figures);
+  const safe = String(a.name || '지리자료').replace(/[\\/:*?"<>|]/g, '_').slice(0, 60);
+  st ??= { ...loadStyle(), ...style };
+  if (a.questionPack) {
+    if (remote && !publish) throw new Error('원격 파일 게시 설정을 확인하세요.');
+    const pack = saveQuestionPack({ figure: figures[0], drawing: await makeFigure(figures[0], st), question,
+      style: st, name: safe.replace(/\.{2,}/g, '_'), outDir: a.outDir || OUT, publish: remote ? publish : null });
+    if (a.responseMode === 'compact') return pack;
+    return { ...pack, files: [pack.studentHwpx, pack.teacherCsv], ...(remote ? { expires: publish.keepText } : {}) };
+  }
   if (a.appendTable && !a.formats.includes('hwpx')) throw new Error('자료표를 붙이려면 formats에 hwpx를 포함하세요.');
   const wantsCsv = a.formats.includes('csv');
   const wantsTable = wantsCsv || a.appendTable;
   const audience = a.audience || 'student';
   const tables = wantsTable ? figures.map(f => sourceTable(f, audience)) : [];
-  st ??= { ...loadStyle(), ...style };
   const figs = [];
   const documentFormats = a.formats.filter(format => format !== 'csv');
   if (documentFormats.length) {
     for (const f of figures) figs.push(await makeFigure(f, st));
   }
-  const safe = String(a.name || '지리자료').replace(/[\\/:*?"<>|]/g, '_').slice(0, 60);
   const suffix = audience === 'teacher' ? '교사용' : '학생용';
   const docName = a.appendTable || a.audience ? safe + '_' + suffix : safe;
   const dir = remote ? publish.newDir() : (a.outDir || OUT);
@@ -367,6 +468,7 @@ server.tool('make_figures', '그림 명세로 PPTX·HWPX 파일을 만든다. �
     specFile = path.join(dir, docName + '.geo-figure.json');
     fs.writeFileSync(specFile, JSON.stringify({ name: docName, formats: documentFormats, style, answerKey: a.answerKey, figures }, null, 1));
   }
+  if (a.responseMode === 'compact') return { files };
   return { files, ...(updateNotice() ? { update: updateNotice() } : {}), ...(remote ? { expires: `내려받기 주소는 ${publish.keepText} 동안, 한 번만 열립니다(받으면 서버에서 바로 지움). 꼭 내려받아 저장하세요.` } : {}), ...(keepKeyInChat && answerKey ? { answerKey, answerKeyNote: '교사용 정답표입니다.' } : {}), sizes_mm: figs.map((f) => ({ title: f.title, w: round(f.w), h: round(f.h) })), ...(specFile ? { specFile } : {}), note: '그림마다 묶음 하나 — PPTX는 그룹 해제, HWPX는 개체 풀기를 한 번만 하면 시군구·기호·선·범례가 모두 따로 움직인다(도형 이름이 지역 이름). 범례 칸과 지역은 같은 무늬라 서식 복사로 단계를 바꿀 수 있다. 시안의 범례·기호는 preview_figures의 edit로 바꿀 수 있다.' };
 }));
 
@@ -431,6 +533,8 @@ server.tool('preview_figures', '파일을 만들기 전 PNG 시안을 보여 준
     } else {
       how += ' make_figures에 figures를 보내세요.';
     }
+    const audit = auditFigureData(figures);
+    if (audit.issueCount) content.push({ type: 'text', text: '시안 검산 오류 ' + audit.issueCount + '건 · check_figure로 확인하세요.' });
     content.push({ type: 'text', text: how });
     return { content };
   } catch (e) { return { isError: true, content: [{ type: 'text', text: `오류: ${e.message || e}` }] }; }

@@ -37,7 +37,8 @@ export function buildSvg(fig, style = DEFAULT_STYLE) {
       const anchor = it.anchor === 'l' ? 'start' : it.anchor === 'r' ? 'end' : 'middle';
       const dy = it.v === 't' ? size * 0.8 : it.v === 'b' ? 0 : size * 0.35;
       if (it.box) { const w = it.str.length * size * 0.75 + 0.6, x0 = it.anchor === 'l' ? it.x - 0.3 : it.anchor === 'r' ? it.x - w + 0.3 : it.x - w / 2; out.push(`<rect x="${x0}" y="${it.y + dy - size * 0.95}" width="${w}" height="${size * 1.25}" fill="#FFF"/>`); }
-      return out.push(`<text x="${it.x}" y="${it.y + dy}" font-size="${size}" font-family="${FONT}" font-weight="${it.bold ? 700 : 400}" text-anchor="${anchor}" fill="${it.color || '#000'}">${esc(it.str)}</text>`);
+      const outline = it.halo ? ' stroke="#FFFFFF" stroke-width="0.56" stroke-linejoin="round" paint-order="stroke fill"' : '';
+      return out.push(`<text x="${it.x}" y="${it.y + dy}" font-size="${size}" font-family="${FONT}" font-weight="${it.bold ? 700 : 400}" text-anchor="${anchor}" fill="${it.color || '#000'}"${outline}>${esc(it.str)}</text>`);
     }
   };
   fig.items.forEach(emit);

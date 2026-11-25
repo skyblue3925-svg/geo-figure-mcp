@@ -1,6 +1,6 @@
 // 장면 → PPTX. 모든 도형은 PowerPoint 도형(자유형·사각형·타원·글상자)으로 들어가고 묶음(그룹)으로 묶인다.
 import { zipSync, strToU8 } from 'fflate';
-import { textWidth, DEFAULT_STYLE, bounds } from './scene.js';
+import { textWidth, DEFAULT_STYLE, bounds, flattenShapes, shift } from './scene.js';
 
 const EMU = 36000; // 1mm
 const e = (mm) => Math.round(mm * EMU);
@@ -39,11 +39,6 @@ export function buildPptx(figs, opts = {}) {
   const xfrm = (x, y, w, h) => `<a:xfrm><a:off x="${e(x)}" y="${e(y)}"/><a:ext cx="${e(w)}" cy="${e(h)}"/></a:xfrm>`;
 
   function shape(it) {
-    if (it.t === 'group') {
-      if (!it.items.length) return ''; // 빈 묶음은 넣지 않는다(범위가 무한대가 되어 PowerPoint 가 파일을 거부함)
-      const kids = it.items.map(shape).join('');
-      return grp(it.name || '묶음', it.items, kids);
-    }
     if (it.t === 'poly' || it.t === 'line') {
       const closed = it.t === 'poly';
       const p = path(closed ? it.rings : [it.pts], closed);
@@ -57,8 +52,9 @@ export function buildPptx(figs, opts = {}) {
       const x = it.anchor === 'l' ? it.x - 0.3 : it.anchor === 'r' ? it.x - w + 0.3 : it.x - w / 2;
       const y = it.v === 't' ? it.y : it.v === 'b' ? it.y - h : it.y - h / 2;
       const algn = { l: 'l', c: 'ctr', r: 'r' }[it.anchor];
+      const outline = it.halo ? lnXml(0.18, { gray: '#FFFFFF' }) : '';
       const box = it.box ? '<a:solidFill><a:srgbClr val="FFFFFF"/></a:solidFill>' : '<a:noFill/>';
-      return `<p:sp><p:nvSpPr>${nv(it.name || `글자 ${it.str}`)}<p:cNvSpPr txBox="1"/><p:nvPr/></p:nvSpPr><p:spPr>${xfrm(x, y, w, h)}<a:prstGeom prst="rect"><a:avLst/></a:prstGeom>${box}</p:spPr><p:txBody><a:bodyPr wrap="none" lIns="0" tIns="0" rIns="0" bIns="0" anchor="ctr"><a:noAutofit/></a:bodyPr><a:lstStyle/><a:p><a:pPr algn="${algn}"/><a:r><a:rPr lang="ko-KR" sz="${Math.round(it.size * 100)}" b="${it.bold ? 1 : 0}"><a:solidFill><a:srgbClr val="${hex(it.color || '#000000')}"/></a:solidFill><a:latin typeface="${esc(style.fontPptx || style.font)}"/><a:ea typeface="${esc(style.fontPptx || style.font)}"/></a:rPr><a:t>${esc(it.str)}</a:t></a:r></a:p></p:txBody></p:sp>`;
+      return `<p:sp><p:nvSpPr>${nv(it.name || `글자 ${it.str}`)}<p:cNvSpPr txBox="1"/><p:nvPr/></p:nvSpPr><p:spPr>${xfrm(x, y, w, h)}<a:prstGeom prst="rect"><a:avLst/></a:prstGeom>${box}</p:spPr><p:txBody><a:bodyPr wrap="none" lIns="0" tIns="0" rIns="0" bIns="0" anchor="ctr"><a:noAutofit/></a:bodyPr><a:lstStyle/><a:p><a:pPr algn="${algn}"/><a:r><a:rPr lang="ko-KR" sz="${Math.round(it.size * 100)}" b="${it.bold ? 1 : 0}">${outline}<a:solidFill><a:srgbClr val="${hex(it.color || '#000000')}"/></a:solidFill><a:latin typeface="${esc(style.fontPptx || style.font)}"/><a:ea typeface="${esc(style.fontPptx || style.font)}"/></a:rPr><a:t>${esc(it.str)}</a:t></a:r></a:p></p:txBody></p:sp>`;
     }
     return '';
   }
@@ -68,10 +64,10 @@ export function buildPptx(figs, opts = {}) {
   const W = Math.max(...figs.map((f) => f.w), keyW) + 2 * M, H = Math.max(...figs.map((f) => f.h)) + 2 * M + 8;
   const slides = figs.map((f) => {
     id = 2;
-    const moved = f.items.map((it) => moveIt(it, M, M + 8));
+    const moved = shift(flattenShapes(f.items), M, M + 8);
     const items = moved.map(shape).join('');
     const title = shape({ t: 'text', x: M, y: M, str: f.title || '', size: 9, bold: true, anchor: 'l', v: 't', name: '제목(지워도 됨)' });
-    return slideXml(title + grp(f.title || '그림', moved, items));
+    return slideXml(title + (moved.length > 1 ? grp(f.title || '그림', moved, items) : items));
   });
   if (opts.keyText) {
     id = 2;
@@ -80,13 +76,6 @@ export function buildPptx(figs, opts = {}) {
     slides.push(slideXml(body));
   }
   return zipSync(pptxParts(slides, e(W), e(Math.max(H, (opts.keyText ? opts.keyText.split('\n').length * 5 + 2 * M : 0)))), { level: 6 });
-}
-
-function moveIt(it, dx, dy) {
-  if (it.t === 'group') return { ...it, items: it.items.map((c) => moveIt(c, dx, dy)) };
-  if (it.t === 'poly') return { ...it, rings: it.rings.map((r) => r.map(([x, y]) => [x + dx, y + dy])) };
-  if (it.t === 'line') return { ...it, pts: it.pts.map(([x, y]) => [x + dx, y + dy]) };
-  return { ...it, x: it.x + dx, y: it.y + dy };
 }
 
 const NS = 'xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" xmlns:p="http://schemas.openxmlformats.org/presentationml/2006/main"';

@@ -29,8 +29,8 @@ export function referenceStore(limit, idBytes, now = Date.now) {
 
 export function createReferences(remote = false) {
   return {
-    previews: referenceStore(remote ? 128 : 8, remote ? 24 : 8),
-    questions: referenceStore(remote ? 128 : 8, remote ? 24 : 8),
+    previews: referenceStore(remote ? 128 : 16, remote ? 24 : 8),
+    questions: referenceStore(remote ? 128 : 16, remote ? 24 : 8),
     datasets: referenceStore(remote ? 64 : 8, 24),
   };
 }

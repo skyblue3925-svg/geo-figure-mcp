@@ -1,9 +1,13 @@
+import { validateDaytimeComparison } from './paired-daytime.js';
+
 function detail(label, value) {
   return value == null || value === '' ? '' : label + ' ' + value;
 }
 
 function regionTable(figure, teacher) {
   const { link } = figure;
+  const paired = Boolean(link.comparison);
+  if (paired) validateDaytimeComparison(figure);
   const map = figure.parts?.[link.mapPart]?.map;
   const chart = figure.parts?.[link.chartPart]?.chart;
   const plottedValues = chart?.series?.[0]?.values;
@@ -21,7 +25,8 @@ function regionTable(figure, teacher) {
     detail('원자료', metadata.sourceUrl),
     '순위는 원값이 큰 순서입니다. 원값이 같으면 같은 순위를 표시합니다.',
   ].filter(Boolean);
-  if (Number.isInteger(link.digits)) notes.push('그래프 값은 소수 ' + link.digits + '자리까지 반올림한 값입니다.');
+  if (Number.isInteger(link.digits)) notes.push((paired ? '지수 그래프 값' : '그래프 값') + '은 소수 ' + link.digits + '자리까지 반올림한 값입니다.');
+  if (paired) notes.push('순유입 인구는 같은 지역·연도의 통근·통학 유입 인구에서 유출 인구를 뺀 값입니다.');
   if (hasLabels) notes.push('기호 없음은 지도나 그래프에 지역 기호가 표시되지 않은 경우입니다.');
 
   let rank = 0;
@@ -33,12 +38,15 @@ function regionTable(figure, teacher) {
     const label = mapLabel || (hasLabels ? '기호 없음' : chart.categories?.[index] || region.mapName);
     const classLabel = map.legend?.[map.classes?.[region.mapName]] ?? '';
     return [...(teacher ? [region.mapName, mapLabel || '기호 없음'] : [label]),
-      region.value, included ? plottedValues[index] ?? '' : '', classLabel, rank, included ? '포함' : '미포함'];
+      region.value, included ? plottedValues[index] ?? '' : '', classLabel, rank, included ? '포함' : '미포함',
+      ...(paired ? [region.inflow, region.outflow, region.netInflow] : [])];
   });
   return {
     title: '그림에 사용한 자료 · 지역 통계',
     columns: [...(teacher ? ['지역명', '지도 기호'] : [hasLabels ? '지역 기호' : '지역']),
-      '원값' + suffix, '그래프 값' + suffix, '지도 범례', '순위', '그래프 포함'],
+      (paired ? '주간 인구 지수 원값' : '원값') + suffix, (paired ? '주간 인구 지수 그래프 값' : '그래프 값') + suffix,
+      '지도 범례', paired ? '지수 순위' : '순위', '그래프 포함',
+      ...(paired ? ['유입 인구-계 (명)', '유출 인구-계 (명)', '순유입 인구 (명)'] : [])],
     rows,
     notes,
   };

@@ -1,6 +1,7 @@
 import { listRegions } from './maps.js';
 import { CLASS_FILLS } from './scene.js';
 import { climateAnswerEntries, relabelClimateFigure } from './climate-linked.js';
+import { withDaytimeComparison, validateDaytimeComparison } from './paired-daytime.js';
 
 export { makeClimateFigure } from './climate-linked.js';
 
@@ -41,7 +42,7 @@ function categoryLabels(chartRegions, regions, labels) {
   return categories;
 }
 
-export function makeLinkedFigure(data, { indicator, within, breaks, top, labels = {}, title, digits } = {}) {
+export function makeLinkedFigure(data, { indicator, within, breaks, top, labels = {}, title, digits, comparison, valueLabels } = {}) {
   if (!text(indicator)) throw new Error('indicator에 자료의 지표 이름을 지정하세요.');
   if (!Array.isArray(breaks) || breaks.length < 1 || breaks.length >= CLASS_FILLS.length ||
       breaks.some((value, i) => !Number.isFinite(value) || (i > 0 && value <= breaks[i - 1]))) {
@@ -51,6 +52,8 @@ export function makeLinkedFigure(data, { indicator, within, breaks, top, labels 
   if (digits !== undefined && (!Number.isInteger(digits) || digits < 0 || digits > 6)) {
     throw new Error('digits에는 0~6 사이 정수를 지정하세요.');
   }
+  if (valueLabels !== undefined && valueLabels !== 'all') throw new Error('막대 값 표시에는 valueLabels: "all"을 지정하세요.');
+  if (comparison !== undefined && comparison !== 'daytimeNetInflow') throw new Error('알 수 없는 비교 지표입니다.');
   if (!Array.isArray(data?.rows) || !data.rows.length) throw new Error('자료에 지역 행이 없습니다.');
 
   const seoulDaytime = data.title === '서울 자치구 상주·주간 인구' && String(data.year) === '2020';
@@ -110,17 +113,19 @@ export function makeLinkedFigure(data, { indicator, within, breaks, top, labels 
     categories: categoryLabels(chartRegions, regions, symbols),
     series: [{ name: indicator, values: plotted.map((r) => digits === undefined ? r.value : Number(r.value.toFixed(digits))) }],
     unit,
+    ...(valueLabels ? { valueLabels } : {}),
   };
   const cite = text(data.cite);
   const sourceUrl = text(data.sourceUrl);
   const source = [cite, period && !cite.includes(period) ? period : ''].filter(Boolean).join(', ');
-  return {
+  const figure = {
     title: text(title) || text(data.title) || indicator,
     source,
     parts: [{ map }, { chart }],
     link: { version: 1, mapPart: 0, chartPart: 1, indicator, unit, regions, chartRegions,
       ...(digits === undefined ? {} : { digits }), metadata: { period, cite, ...(sourceUrl ? { sourceUrl } : {}) } },
   };
+  return comparison ? withDaytimeComparison(figure, data) : figure;
 }
 
 const MAP_BINDING_ERROR = '저장된 지도와 그래프의 기호를 일대일로 확인할 수 없습니다. 지도와 같은 기호를 그래프에 지정하거나 연결된 그림을 새로 만드세요.';
@@ -151,6 +156,7 @@ export function relabelFigure(figure, { partIndex = 0, labels }) {
   if (!map) throw new Error('기호를 수정할 지도 부분이 없습니다.');
   const current = map.labels || {};
   const link = figure.link;
+  if (link?.comparison) validateDaytimeComparison(figure);
   if (link && (link.version !== 1 || link.mapPart !== partIndex)) throw new Error(MAP_BINDING_ERROR);
   if (link && (!Array.isArray(link.regions) || !Array.isArray(link.chartRegions))) throw new Error(MAP_BINDING_ERROR);
   const regions = link?.regions;
@@ -165,6 +171,10 @@ export function relabelFigure(figure, { partIndex = 0, labels }) {
     if (chartPart?.chart?.type !== 'bar') throw new Error(MAP_BINDING_ERROR);
     const categories = categoryLabels(link.chartRegions, regions, next);
     result.parts[link.chartPart] = { ...chartPart, chart: { ...chartPart.chart, categories } };
+    if (link.comparison) {
+      const i = link.comparison.chartPart;
+      result.parts[i] = { ...result.parts[i], chart: { ...result.parts[i].chart, categories: [...categories] } };
+    }
     return result;
   }
   const chartParts = parts.filter((part) => part.chart);
@@ -197,7 +207,8 @@ export function figureAnswerKey(figures) {
     if (!labels.length) continue;
     const entries = labels.map(([name, symbol]) => {
       const region = link?.regions.find((r) => r.mapName === name);
-      return symbol + ' = ' + name + (region ? ' (' + link.indicator + ' ' + region.value + ' ' + link.unit + ')' : '');
+      const net = link?.comparison ? ', 순유입 인구 ' + region.netInflow.toLocaleString('ko-KR') + '명' : '';
+      return symbol + ' = ' + name + (region ? ' (' + link.indicator + ' ' + region.value + ' ' + link.unit + net + ')' : '');
     });
     sections.push([...heading, ...entries].join('\n'));
   }

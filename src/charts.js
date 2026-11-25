@@ -11,6 +11,7 @@ export function niceTicks(min, max, n = 5) {
   return t;
 }
 const fmt = (v) => (Math.abs(v) >= 1000 ? v.toLocaleString('en-US') : String(+v.toFixed(2)));
+const barNumber = new Intl.NumberFormat('ko-KR', { maximumSignificantDigits: 21 });
 
 function legend(series, x, y, st, fills = SERIES_FILLS) {
   const items = [];
@@ -58,7 +59,7 @@ export function barChart(spec, st = DEFAULT_STYLE) {
       const top = sc(Math.max(a, b)), bot = sc(Math.min(a, b));
       bars.push(S.rect(x, top, bw, bot - top, { fill, stroke: 0.2, name: `${c} ${s.name}` }));
       const show = spec.valueLabels === 'all' || (spec.valueLabels === 'last' && k === ns - 1);
-      if (show && v && (!spec.stacked || bot - top >= 3.2)) bars.push(S.text(x + bw / 2, spec.stacked ? (top + bot) / 2 : top - 1.8, fmt(v), { size: st.small - 0.5, box: spec.stacked, name: '값' }));
+      if (show && (!spec.stacked || bot - top >= 3.2)) bars.push(S.text(x + bw / 2, spec.stacked ? (top + bot) / 2 : top - 1.8, barNumber.format(v), { size: st.small - 0.5, box: spec.stacked, name: '값' }));
     });
     bars.push(S.text(L + band * i + band / 2, y1 + 3.2, c, { size: st.small, name: `항목 ${c}` }));
     items.push(S.group(`막대 ${c}`, bars));

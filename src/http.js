@@ -13,6 +13,7 @@ import path from 'node:path';
 import crypto from 'node:crypto';
 import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
 import { createServer } from './tools.js';
+import { BATCH_TOOL, MAX_QUESTIONS } from './batch-question.js';
 import { createReferences } from './references.js';
 
 const PORT = +(process.env.PORT || 8787);
@@ -26,7 +27,13 @@ const DAILY_MAX = +(process.env.DAILY_MAX || 600);
 if (!TOKEN && process.env.ALLOW_OPEN !== '1') { console.error('ACCESS_TOKEN 을 정하세요(비밀번호 없이 열려면 ALLOW_OPEN=1).'); process.exit(1); }
 const tokenOk = (got) => { const a = Buffer.from(String(got || '')), b = Buffer.from(TOKEN); return a.length === b.length && crypto.timingSafeEqual(a, b); };
 let day = '', dayCount = 0;
-const dailyOver = () => { const d = new Date().toISOString().slice(0, 10); if (d !== day) { day = d; dayCount = 0; } return ++dayCount > DAILY_MAX; };
+function dailyOver(count) {
+  const today = new Date().toISOString().slice(0, 10);
+  if (today !== day) { day = today; dayCount = 0; }
+  if (dayCount + count > DAILY_MAX) return true;
+  dayCount += count;
+  return false;
+}
 fs.mkdirSync(FILES, { recursive: true });
 
 const references = createReferences(true);
@@ -39,6 +46,7 @@ const publish = {
 // 오래된 파일 지우기(5분마다)
 setInterval(() => {
   references.previews.purge();
+  references.questions.purge();
   references.datasets.purge();
   for (const d of fs.readdirSync(FILES)) {
     const p = path.join(FILES, d);
@@ -48,11 +56,13 @@ setInterval(() => {
 
 // 사용량 제한: IP 마다 1분에 60번, 그림 만들기는 1시간에 90번
 const hits = new Map();
-function limited(ip, kind, max, windowMs) {
+function limited(ip, kind, max, windowMs, count = 1) {
   const k = `${ip}|${kind}`, now = Date.now();
   const arr = (hits.get(k) || []).filter((t) => now - t < windowMs);
-  arr.push(now); hits.set(k, arr);
-  return arr.length > max;
+  if (arr.length + count > max) return true;
+  for (let i = 0; i < count; i++) arr.push(now);
+  hits.set(k, arr);
+  return false;
 }
 
 const send = (res, code, body, type = 'application/json; charset=utf-8') => { res.writeHead(code, { 'Content-Type': type, 'Access-Control-Allow-Origin': '*' }); res.end(typeof body === 'string' ? body : JSON.stringify(body)); };
@@ -88,9 +98,17 @@ const server = http.createServer(async (req, res) => {
     for await (const ch of req) { raw += ch; if (raw.length > 2_000_000) return send(res, 413, { error: '요청이 너무 큽니다.' }); }
     let body;
     try { body = JSON.parse(raw); } catch { return send(res, 400, { error: 'JSON 이 아닙니다.' }); }
-    const isMake = [].concat(body).some((m) => m?.method === 'tools/call' && m?.params?.name === 'make_figures');
-    if (isMake && limited(ip, 'make', MAKE_PER_HOUR, 3600 * 1000)) return send(res, 429, { error: '같은 접속 IP에서는 최근 1시간에 ' + MAKE_PER_HOUR + '번까지 파일을 만들 수 있습니다.' });
-    if (isMake && dailyOver()) return send(res, 429, { error: '오늘 서버 전체 사용량을 다 썼습니다. 내일 다시 쓰거나 내 컴퓨터에 설치해 쓰세요.' });
+    const exportCount = [].concat(body).reduce((count, message) => {
+      if (message?.method !== 'tools/call') return count;
+      const { name, arguments: args } = message.params ?? {};
+      if (name === 'make_figures') return count + 1;
+      if (name === BATCH_TOOL && args?.confirmed === true && Array.isArray(args.items) && args.items.length <= MAX_QUESTIONS) {
+        return count + args.items.length;
+      }
+      return count;
+    }, 0);
+    if (exportCount && limited(ip, 'make', MAKE_PER_HOUR, 3600 * 1000, exportCount)) return send(res, 429, { error: '같은 접속 IP에서는 최근 1시간에 ' + MAKE_PER_HOUR + '번까지 파일을 만들 수 있습니다.' });
+    if (exportCount && dailyOver(exportCount)) return send(res, 429, { error: '오늘 서버 전체 사용량을 다 썼습니다. 내일 다시 쓰거나 내 컴퓨터에 설치해 쓰세요.' });
     try {
       const mcp = createServer({ remote: true, publish, references });
       const transport = new StreamableHTTPServerTransport({ sessionIdGenerator: undefined, enableJsonResponse: true });

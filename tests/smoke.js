@@ -53,6 +53,18 @@ ok(grid.some((item) => item.name === '경도 눈금' && item.str === '60°E') &&
   '세계지도: 위도와 경도 눈금 기본 표시');
 ok(!makeMap({ region: 'world', graticule: 0 }).some((item) => item.name === gridName), '세계지도: 위·경도선과 눈금 숨김');
 
+// Nested scene data is also exported as exactly one document group.
+const nested = await makeFigure({ ...specs[2], grouping: 'nested', map: { ...specs[2].map, labelStyle: 'halo' } });
+for (const file of exportFigures([nested], { outDir: out, name: '한_겹_묶음' })) {
+  const isHwpx = file.endsWith('.hwpx');
+  const part = isHwpx ? 'Contents/section0.xml' : 'ppt/slides/slide1.xml';
+  const xml = strFromU8(unzipSync(fs.readFileSync(file))[part]);
+  const start = isHwpx ? /<hp:container /g : /<p:grpSp>/g;
+  const label = isHwpx ? /<hp:t>A<\/hp:t>/g : /<a:t>A<\/a:t>/g;
+  ok([...xml.matchAll(start)].length === 1 && [...xml.matchAll(label)].length === 1,
+    path.basename(file) + ': 바깥 묶음 하나, 기호 A 글상자 하나');
+}
+
 // 파일
 const files = exportFigures(figs, { outDir: out, name: '검사', answerKey: '정답표\nA = 가' });
 for (const f of files) {

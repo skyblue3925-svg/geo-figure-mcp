@@ -152,7 +152,7 @@ try {
   }
   assert.ok(table.notes.some(n=>n.includes('DT_1PA2020')));
   const examPreview = id(await call('preview_figures', { linked: {
-    dataId: regional.dataId, within: ['경기'], indicator, breaks: [90, 100, 110], top: 5,
+    dataId: regional.dataId, within: ['경기'], indicator, breaks: [90, 100, 110], top: 5, valueLabels: 'all',
     title: '2020년 경기도 시·군별 주간 인구 지수와 상위 5개 지역',
   } }));
   const regionalChoices = [
@@ -186,7 +186,7 @@ try {
   assert.equal(csvRows.filter(r => r[6] === '포함').length, 5);
   // Anonymized labels and rounded bars must survive the full preview route.
   const tiePreview = id(await call('preview_figures', { linked: { dataId: regional.dataId, within: ['경기'], indicator,
-    breaks: [100], digits: 0, labels: { '경기 화성시': 'A', '경기 평택시': 'B' } } }));
+    breaks: [100], digits: 0, valueLabels: 'all', labels: { '경기 화성시': 'A', '경기 평택시': 'B' } } }));
   const tieChoices = [
     { kind: 'chartRank', region: 'A', rank: 5 }, { kind: 'chartRank', region: 'B', rank: 5 },
     { kind: 'bandCount', band: '100 이상', count: 10 }, { kind: 'sameBand', left: 'A', right: 'B' },
@@ -198,16 +198,18 @@ try {
   assert.equal(tie.checks[0].evidence.rank, tie.checks[1].evidence.rank);
   for (const choice of [
     { kind: 'chartRank', region: '화성시', rank: 5 }, { kind: 'coversThreshold', threshold: 99 },
-    { kind: 'daytimeSurplus', region: 'A', percent: 7 },
   ]) {
     const r = await client.callTool({ name: 'check_regional_question',
       arguments: { previewId: tiePreview, choices: [choice, ...tieChoices.slice(1)] } });
     assert.equal(r.isError, true);
   }
+  const unclear = await verifyRegional([{ kind: 'daytimeSurplus', region: 'A', percent: 7 }, ...tieChoices.slice(1)], tiePreview);
+  assert.equal(unclear.checks[0].readable, false);
+  assert.equal(unclear.questionId, undefined);
   const population = await query('find_data', { source: 'bundle', asReference: true,
     bundle: { key: 'census-population', items: ['총인구'], period: '2025', within: ['경기'] } });
   const popId = id(await call('preview_figures', { linked: { dataId: population.dataId, indicator: '총인구',
-    within: ['경기'], top: 5, breaks: [1000000] } }));
+    within: ['경기'], top: 5, breaks: [1000000], valueLabels: 'all' } }));
   const popTable = await query('get_source_table', { previewId: popId, audience: 'teacher' });
   const first = popTable.rows[0][0].replace('경기 ', ''), second = popTable.rows[1][0].replace('경기 ', '');
   const popChoices = [

@@ -32,7 +32,7 @@ export const S = {
   dot: (x, y, r, o = {}) => ({ t: 'ellipse', x: x - r, y: y - r, w: 2 * r, h: 2 * r, fill: o.fill || { k: 'solid', gray: '#000000' }, stroke: o.stroke ?? 0, name: o.name }),
   ellipse: (x, y, w, h, o = {}) => ({ t: 'ellipse', x, y, w, h, fill: o.fill || { k: 'none' }, stroke: o.stroke ?? 0.2, name: o.name }),
   // anchor: 'l' | 'c' | 'r' ; v: 't' | 'm' | 'b' — (x,y) 는 기준점
-  text: (x, y, str, o = {}) => ({ t: 'text', x, y, str: String(str), size: o.size || 8, bold: !!o.bold, anchor: o.anchor || 'c', v: o.v || 'm', box: !!o.box, color: o.color, name: o.name }),
+  text: (x, y, str, o = {}) => ({ t: 'text', x, y, str: String(str), size: o.size || 8, bold: !!o.bold, anchor: o.anchor || 'c', v: o.v || 'm', box: !!o.box, halo: !!o.halo, color: o.color, name: o.name }),
   group: (name, items, o = {}) => ({ t: 'group', name, items: items.filter(Boolean), keep: !!o.keep }),
 };
 
@@ -62,6 +62,11 @@ export function bounds(items) {
   };
   items.forEach(walk);
   return { x: x0, y: y0, w: x1 - x0, h: y1 - y0 };
+}
+
+// Group coordinates are already in the scene's coordinate system.
+export function flattenShapes(items) {
+  return items.flatMap(item => item.t === 'group' ? flattenShapes(item.items) : [item]);
 }
 
 // 장면을 (0,0) 기준으로 옮긴다
@@ -100,7 +105,7 @@ export function withFooter(fig, style = DEFAULT_STYLE) {
 }
 
 // 지도 기호 글자. style: 'halo'(글자 둘레 흰 테두리, 기본) | 'plain'(바탕 없음) | 'box'(네모 흰 바탕) | 'circle'(작은 원 흰 바탕)
-// halo·circle 은 글자와 바탕이 함께 움직이도록 작은 묶음 하나로 둔다(그림 묶음을 풀어도 기호마다 한 덩어리)
+// 원형 바탕은 시안 장면에서만 글자와 함께 묶인다.
 export const LABEL_STYLES = ['halo', 'plain', 'box', 'circle'];
 export function labelShape(x, y, str, o = {}, style = 'halo') {
   const name = o.name || `기호 ${str}`;
@@ -111,7 +116,5 @@ export function labelShape(x, y, str, o = {}, style = 'halo') {
     const r = Math.max(textWidth(str, o.size || 8), (o.size || 8) * 0.3528) / 2 + 0.5;
     return S.group(name, [S.ellipse(x + anchorDx - r, y - r, 2 * r, 2 * r, { fill: { k: 'solid', gray: '#FFFFFF' }, stroke: 0, name: `${name} 바탕` }), S.text(x, y, str, { ...o, name })], { keep: true });
   }
-  const d = 0.28, k = [];
-  for (const [dx, dy] of [[d, 0], [-d, 0], [0, d], [0, -d], [d * 0.7, d * 0.7], [-d * 0.7, d * 0.7], [d * 0.7, -d * 0.7], [-d * 0.7, -d * 0.7]]) k.push(S.text(x + dx, y + dy, str, { ...o, color: '#FFFFFF', name: `${name} 테두리` }));
-  return S.group(name, [...k, S.text(x, y, str, { ...o, name })], { keep: true });
+  return S.text(x, y, str, { ...o, halo: true, name });
 }
